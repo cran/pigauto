@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+
+
+<title>Getting started with pigauto</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+
+<style type="text/css">
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+
+<style type="text/css">
+code {
+white-space: pre;
+}
+.sourceCode {
+overflow: visible;
+}
+</style>
+<style type="text/css" data-origin="pandoc">
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    var j = 0;
+    while (j < rules.length) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") {
+        j++;
+        continue;
+      }
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' && rule.style.backgroundColor === '') {
+        j++;
+        continue;
+      }
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">Getting started with pigauto</h1>
+
+
+
+<div id="what-pigauto-does" class="section level2">
+<h2>What pigauto does</h2>
+<p>Many comparative datasets have missing trait values: species were not
+measured, specimens were unavailable, or data were lost. pigauto fills
+in those gaps using three sources of information:</p>
+<ol style="list-style-type: decimal">
+<li><strong>The phylogenetic tree.</strong> Closely related species tend
+to share similar traits, so known values of relatives are informative
+about missing ones.</li>
+<li><strong>Cross-trait correlations.</strong> If body mass predicts
+beak length, then observed masses help impute missing beak lengths even
+when the species itself was never measured for that trait.</li>
+<li><strong>Environmental covariates</strong> (optional). Climate,
+habitat, or geographic variables can improve imputation when trait
+variation has a strong environmental component beyond phylogenetic
+signal.</li>
+</ol>
+<p>The package handles continuous measurements, counts, binary
+variables, ordered categories, unordered categories, bounded
+proportions, zero-inflated counts, and compositional multi-proportion
+data — all in a single call to <code>impute()</code>.</p>
+<div id="how-it-works-briefly" class="section level3">
+<h3>How it works (briefly)</h3>
+<p>pigauto combines a phylogenetic baseline with a graph neural network
+(GNN) correction. The baseline uses Brownian-motion conditional
+imputation for continuous-family latent columns and phylogenetic
+label-propagation or threshold/liability candidates for discrete-family
+columns. The GNN learns additional patterns from tree topology and
+cross-trait structure. A per-trait gate controls how much the GNN
+contributes: when the baseline is already good enough, the gate closes
+and the GNN stays out of the way. This is verified on held-out data
+after training.</p>
+<blockquote>
+<p><strong>Technical note.</strong> The internal class name
+<code>ResidualPhyloDAE</code> refers to the ResNet-style skip
+connections inside the GNN layers, not to a statistical residual
+<code>y - baseline</code>.</p>
+</blockquote>
+<p>The phylogenetic structure is encoded as:</p>
+<ul>
+<li>A symmetric-normalised Gaussian-kernel adjacency matrix derived from
+cophenetic (patristic) distances.</li>
+<li><em>k</em> Laplacian eigenvectors as node positional features —
+these encode phylogenetic clusters at multiple scales.</li>
+</ul>
+</div>
+</div>
+<div id="installation" class="section level2">
+<h2>Installation</h2>
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="co"># CRAN release</span></span>
+<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a><span class="fu">install.packages</span>(<span class="st">&quot;pigauto&quot;</span>)</span>
+<span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" tabindex="-1"></a><span class="co"># Development version</span></span>
+<span id="cb1-5"><a href="#cb1-5" tabindex="-1"></a>pak<span class="sc">::</span><span class="fu">pak</span>(<span class="st">&quot;itchyshin/pigauto&quot;</span>)</span>
+<span id="cb1-6"><a href="#cb1-6" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" tabindex="-1"></a><span class="co"># torch backend (required; ~1 GB first-time download)</span></span>
+<span id="cb1-8"><a href="#cb1-8" tabindex="-1"></a>torch<span class="sc">::</span><span class="fu">install_torch</span>()</span></code></pre></div>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="fu">library</span>(pigauto)</span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="fu">library</span>(ape)</span></code></pre></div>
+</div>
+<div id="quick-start" class="section level2">
+<h2>Quick start</h2>
+<p>For most users, a single function call is all you need:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">impute</span>(traits, tree)</span>
+<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a>result<span class="sc">$</span>completed    <span class="co"># data.frame: observed values preserved, NAs filled</span></span>
+<span id="cb3-4"><a href="#cb3-4" tabindex="-1"></a>result<span class="sc">$</span>imputed_mask <span class="co"># logical matrix: TRUE where a cell was imputed</span></span>
+<span id="cb3-5"><a href="#cb3-5" tabindex="-1"></a>result<span class="sc">$</span>prediction<span class="sc">$</span>se <span class="co"># per-cell uncertainty (original units)</span></span></code></pre></div>
+<p><code>impute()</code> runs the full pipeline internally —
+preprocessing, baseline fitting, graph construction, GNN training,
+calibration, and prediction. The rest of this vignette walks through
+each step individually for users who need fine-grained control, want to
+cache intermediate objects, or are benchmarking components.</p>
+</div>
+<div id="the-avonet-bird-data" class="section level2">
+<h2>The AVONET bird data</h2>
+<p>pigauto ships with <code>avonet300</code>, a 300-species subset of
+the AVONET v3 bird morphology database (Tobias et al. 2022, <em>Ecology
+Letters</em>), and <code>tree300</code>, a matching pruned Hackett MCC
+phylogeny from BirdTree.org.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a><span class="fu">data</span>(avonet300, tree300, <span class="at">package =</span> <span class="st">&quot;pigauto&quot;</span>)</span>
+<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a></span>
+<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a><span class="fu">head</span>(avonet300)</span>
+<span id="cb4-4"><a href="#cb4-4" tabindex="-1"></a><span class="co">#&gt;                Species_Key    Mass Beak.Length_Culmen Tarsus.Length Wing.Length</span></span>
+<span id="cb4-5"><a href="#cb4-5" tabindex="-1"></a><span class="co">#&gt; 2   Nothoprocta_pentlandii   300.7               27.9          37.0       148.2</span></span>
+<span id="cb4-6"><a href="#cb4-6" tabindex="-1"></a><span class="co">#&gt; 1         Eudromia_formosa   772.9               32.5          49.5       223.9</span></span>
+<span id="cb4-7"><a href="#cb4-7" tabindex="-1"></a><span class="co">#&gt; 3           Rhea_americana 23000.0               86.5         308.0       604.5</span></span>
+<span id="cb4-8"><a href="#cb4-8" tabindex="-1"></a><span class="co">#&gt; 4     Ptilopachus_petrosus   193.0               16.9          28.0       117.2</span></span>
+<span id="cb4-9"><a href="#cb4-9" tabindex="-1"></a><span class="co">#&gt; 9      Bambusicola_fytchii   313.7               21.6          45.2       142.8</span></span>
+<span id="cb4-10"><a href="#cb4-10" tabindex="-1"></a><span class="co">#&gt; 10 Francolinus_psilolaemus   478.3               30.2          43.1       167.3</span></span>
+<span id="cb4-11"><a href="#cb4-11" tabindex="-1"></a><span class="co">#&gt;    Trophic.Level Primary.Lifestyle Migration</span></span>
+<span id="cb4-12"><a href="#cb4-12" tabindex="-1"></a><span class="co">#&gt; 2      Herbivore       Terrestrial  Resident</span></span>
+<span id="cb4-13"><a href="#cb4-13" tabindex="-1"></a><span class="co">#&gt; 1      Herbivore       Terrestrial  Resident</span></span>
+<span id="cb4-14"><a href="#cb4-14" tabindex="-1"></a><span class="co">#&gt; 3       Omnivore       Terrestrial  Resident</span></span>
+<span id="cb4-15"><a href="#cb4-15" tabindex="-1"></a><span class="co">#&gt; 4      Herbivore       Terrestrial  Resident</span></span>
+<span id="cb4-16"><a href="#cb4-16" tabindex="-1"></a><span class="co">#&gt; 9      Herbivore       Terrestrial  Resident</span></span>
+<span id="cb4-17"><a href="#cb4-17" tabindex="-1"></a><span class="co">#&gt; 10     Herbivore       Terrestrial  Resident</span></span>
+<span id="cb4-18"><a href="#cb4-18" tabindex="-1"></a>ape<span class="sc">::</span><span class="fu">Ntip</span>(tree300)</span>
+<span id="cb4-19"><a href="#cb4-19" tabindex="-1"></a><span class="co">#&gt; [1] 300</span></span></code></pre></div>
+<p>The four morphological traits — body mass, beak length, tarsus
+length, and wing length — are all log-normally distributed and highly
+heritable, making them ideal test cases for phylogenetic imputation.</p>
+</div>
+<div id="step-1-preprocess" class="section level2">
+<h2>Step 1: Preprocess</h2>
+<p><code>preprocess_traits()</code> log-transforms and z-scores the
+traits, and reorders rows to match the phylogeny’s tip order (required
+by the graph operations).</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a>traits <span class="ot">&lt;-</span> avonet300[, <span class="sc">-</span><span class="dv">1</span>]              <span class="co"># drop Species_Key column</span></span>
+<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a><span class="fu">rownames</span>(traits) <span class="ot">&lt;-</span> avonet300<span class="sc">$</span>Species_Key</span>
+<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a>pd <span class="ot">&lt;-</span> <span class="fu">preprocess_traits</span>(traits, tree300, <span class="at">log_transform =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a><span class="fu">print</span>(pd)</span>
+<span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a><span class="co">#&gt; pigauto_data</span></span>
+<span id="cb5-7"><a href="#cb5-7" tabindex="-1"></a><span class="co">#&gt;   Species: 300 </span></span>
+<span id="cb5-8"><a href="#cb5-8" tabindex="-1"></a><span class="co">#&gt;   Traits:  7 </span></span>
+<span id="cb5-9"><a href="#cb5-9" tabindex="-1"></a><span class="co">#&gt;   Types:   categorical=2, continuous=4, ordinal=1 </span></span>
+<span id="cb5-10"><a href="#cb5-10" tabindex="-1"></a><span class="co">#&gt;   Latent columns: 14 </span></span>
+<span id="cb5-11"><a href="#cb5-11" tabindex="-1"></a><span class="co">#&gt;   Missing values: 0 %</span></span></code></pre></div>
+<p>The object <code>pd</code> is a <code>pigauto_data</code> list
+containing:</p>
+<ul>
+<li><code>X_scaled</code>: the z-scored, log-transformed trait matrix
+(300 × 4)</li>
+<li><code>means</code>, <code>sds</code>: per-trait normalisation
+parameters (for back-transformation)</li>
+<li><code>log_transform</code>: <code>TRUE</code>, recorded so
+<code>predict()</code> can invert it automatically</li>
+</ul>
+</div>
+<div id="step-2-create-evaluation-splits" class="section level2">
+<h2>Step 2: Create evaluation splits</h2>
+<p>We designate 25% of all matrix cells as “missing” for evaluation.
+These cells are <em>not</em> used during training or baseline fitting;
+they provide an honest estimate of imputation error.</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a>splits <span class="ot">&lt;-</span> <span class="fu">make_missing_splits</span>(pd<span class="sc">$</span>X_scaled, <span class="at">missing_frac =</span> <span class="fl">0.25</span>, <span class="at">seed =</span> <span class="dv">42</span>)</span>
+<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a></span>
+<span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Total held-out cells:&quot;</span>, <span class="fu">length</span>(splits<span class="sc">$</span>val_idx) <span class="sc">+</span> <span class="fu">length</span>(splits<span class="sc">$</span>test_idx), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a><span class="co">#&gt; Total held-out cells: 1049</span></span>
+<span id="cb6-5"><a href="#cb6-5" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;  Validation:&quot;</span>, <span class="fu">length</span>(splits<span class="sc">$</span>val_idx), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb6-6"><a href="#cb6-6" tabindex="-1"></a><span class="co">#&gt;   Validation: 262</span></span>
+<span id="cb6-7"><a href="#cb6-7" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;  Test:      &quot;</span>, <span class="fu">length</span>(splits<span class="sc">$</span>test_idx), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb6-8"><a href="#cb6-8" tabindex="-1"></a><span class="co">#&gt;   Test:       787</span></span></code></pre></div>
+<p>The missing cells are split further: validation cells guide early
+stopping, test cells provide the final unbiased performance
+estimate.</p>
+</div>
+<div id="step-3-fit-the-bm-baseline" class="section level2">
+<h2>Step 3: Fit the BM baseline</h2>
+<p><code>fit_baseline()</code> fits the phylogenetic BM baseline after
+masking the held-out cells. This gives the benchmark against which the
+GNN will be compared.</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>baseline <span class="ot">&lt;-</span> <span class="fu">fit_baseline</span>(pd, tree300, <span class="at">splits =</span> splits, <span class="at">model =</span> <span class="st">&quot;BM&quot;</span>)</span>
+<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a></span>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Baseline object contains:</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a><span class="co">#&gt; Baseline object contains:</span></span>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;  mu matrix:&quot;</span>, <span class="fu">nrow</span>(baseline<span class="sc">$</span>mu), <span class="st">&quot;x&quot;</span>, <span class="fu">ncol</span>(baseline<span class="sc">$</span>mu), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a><span class="co">#&gt;   mu matrix: 300 x 14</span></span>
+<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;  se matrix:&quot;</span>, <span class="fu">nrow</span>(baseline<span class="sc">$</span>se), <span class="st">&quot;x&quot;</span>, <span class="fu">ncol</span>(baseline<span class="sc">$</span>se), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a><span class="co">#&gt;   se matrix: 300 x 14</span></span></code></pre></div>
+</div>
+<div id="step-4-build-the-phylogenetic-graph" class="section level2">
+<h2>Step 4: Build the phylogenetic graph</h2>
+<p><code>build_phylo_graph()</code> computes the adjacency matrix and
+Laplacian spectral features from the tree. The result can be cached to
+disk for reuse.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a>graph <span class="ot">&lt;-</span> <span class="fu">build_phylo_graph</span>(</span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a>  tree300,</span>
+<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a>  <span class="at">k_eigen    =</span> <span class="dv">8</span>,</span>
+<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a>  <span class="at">sigma_mult =</span> <span class="fl">0.5</span></span>
+<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a>)</span>
+<span id="cb8-6"><a href="#cb8-6" tabindex="-1"></a></span>
+<span id="cb8-7"><a href="#cb8-7" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Graph: n =&quot;</span>, graph<span class="sc">$</span>n, <span class="st">&quot;species</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb8-8"><a href="#cb8-8" tabindex="-1"></a><span class="co">#&gt; Graph: n = 300 species</span></span>
+<span id="cb8-9"><a href="#cb8-9" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Adjacency: [&quot;</span>, <span class="fu">nrow</span>(graph<span class="sc">$</span>adj), <span class="st">&quot;x&quot;</span>, <span class="fu">ncol</span>(graph<span class="sc">$</span>adj), <span class="st">&quot;]</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb8-10"><a href="#cb8-10" tabindex="-1"></a><span class="co">#&gt; Adjacency: [ 300 x 300 ]</span></span>
+<span id="cb8-11"><a href="#cb8-11" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Spectral coords: [&quot;</span>, <span class="fu">nrow</span>(graph<span class="sc">$</span>coords), <span class="st">&quot;x&quot;</span>, <span class="fu">ncol</span>(graph<span class="sc">$</span>coords), <span class="st">&quot;]</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb8-12"><a href="#cb8-12" tabindex="-1"></a><span class="co">#&gt; Spectral coords: [ 300 x 8 ]</span></span>
+<span id="cb8-13"><a href="#cb8-13" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Kernel bandwidth sigma:&quot;</span>, <span class="fu">round</span>(graph<span class="sc">$</span>sigma, <span class="dv">3</span>), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb8-14"><a href="#cb8-14" tabindex="-1"></a><span class="co">#&gt; Kernel bandwidth sigma: 80.293</span></span></code></pre></div>
+<p>For repeated runs, supply <code>cache_path = &quot;graph_cache.rds&quot;</code>
+to skip recomputation.</p>
+</div>
+<div id="step-5-train-the-model" class="section level2">
+<h2>Step 5: Train the model</h2>
+<p>The training loop corrupts a random 55% of observed cells each epoch
+with a learnable mask token, then minimises the type-appropriate loss on
+the corrupted cells plus a shrinkage penalty on
+<code>delta - baseline</code> that pulls the GNN toward the baseline.
+Early stopping is based on held-out validation RMSE.</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">fit_pigauto</span>(</span>
+<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a>  <span class="at">data            =</span> pd,</span>
+<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a>  <span class="at">tree            =</span> tree300,</span>
+<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a>  <span class="at">splits          =</span> splits,</span>
+<span id="cb9-5"><a href="#cb9-5" tabindex="-1"></a>  <span class="at">graph           =</span> graph,</span>
+<span id="cb9-6"><a href="#cb9-6" tabindex="-1"></a>  <span class="at">baseline        =</span> baseline,</span>
+<span id="cb9-7"><a href="#cb9-7" tabindex="-1"></a>  <span class="at">hidden_dim      =</span> <span class="dv">64</span>,</span>
+<span id="cb9-8"><a href="#cb9-8" tabindex="-1"></a>  <span class="at">k_eigen         =</span> <span class="dv">8</span>,</span>
+<span id="cb9-9"><a href="#cb9-9" tabindex="-1"></a>  <span class="at">dropout         =</span> <span class="fl">0.10</span>,</span>
+<span id="cb9-10"><a href="#cb9-10" tabindex="-1"></a>  <span class="at">lr              =</span> <span class="fl">3e-3</span>,</span>
+<span id="cb9-11"><a href="#cb9-11" tabindex="-1"></a>  <span class="at">epochs          =</span> <span class="dv">2000</span>,</span>
+<span id="cb9-12"><a href="#cb9-12" tabindex="-1"></a>  <span class="at">corruption_rate =</span> <span class="fl">0.55</span>,</span>
+<span id="cb9-13"><a href="#cb9-13" tabindex="-1"></a>  <span class="at">lambda_shrink   =</span> <span class="fl">0.03</span>,</span>
+<span id="cb9-14"><a href="#cb9-14" tabindex="-1"></a>  <span class="at">eval_every      =</span> <span class="dv">100</span>,</span>
+<span id="cb9-15"><a href="#cb9-15" tabindex="-1"></a>  <span class="at">patience        =</span> <span class="dv">10</span>,</span>
+<span id="cb9-16"><a href="#cb9-16" tabindex="-1"></a>  <span class="at">verbose         =</span> <span class="cn">TRUE</span>,</span>
+<span id="cb9-17"><a href="#cb9-17" tabindex="-1"></a>  <span class="at">seed            =</span> <span class="dv">1</span></span>
+<span id="cb9-18"><a href="#cb9-18" tabindex="-1"></a>)</span></code></pre></div>
+<p>Example console output during training:</p>
+<pre><code>Epoch  100 | train loss: 0.8431 | val RMSE: 0.8852
+Epoch  200 | train loss: 0.7215 | val RMSE: 0.8601
+...
+Epoch  900 | train loss: 0.6108 | val RMSE: 0.8289
+Early stopping at epoch 900 (no improvement for 10 evals).</code></pre>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a><span class="fu">print</span>(fit)</span></code></pre></div>
+<pre><code>&lt;pigauto_fit&gt;
+  Species  : 300
+  Traits   : 4 -- Mass, Beak.Length_Culmen, Tarsus.Length, Wing.Length
+  Architecture: hidden_dim = 64, k_eigen = 8, dropout = 0.1
+  Val RMSE : 0.828 (z-score)
+  Test RMSE: 0.831 (z-score)</code></pre>
+</div>
+<div id="step-6-predict" class="section level2">
+<h2>Step 6: Predict</h2>
+<p><code>predict.pigauto_fit()</code> runs a single forward pass through
+the trained model, optionally repeated with MC dropout to generate
+multiple stochastic completions for uncertainty quantification. The
+result is back-transformed to the original (non-log) scale.</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a>pred <span class="ot">&lt;-</span> <span class="fu">predict</span>(fit, <span class="at">return_se =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a></span>
+<span id="cb13-3"><a href="#cb13-3" tabindex="-1"></a><span class="co"># pred$imputed: 300 x 4 matrix in original units</span></span>
+<span id="cb13-4"><a href="#cb13-4" tabindex="-1"></a><span class="co"># pred$se:      300 x 4 uncertainty matrix (original units)</span></span>
+<span id="cb13-5"><a href="#cb13-5" tabindex="-1"></a><span class="fu">head</span>(pred<span class="sc">$</span>imputed)</span>
+<span id="cb13-6"><a href="#cb13-6" tabindex="-1"></a></span>
+<span id="cb13-7"><a href="#cb13-7" tabindex="-1"></a><span class="co"># Conformal prediction intervals (95% marginal coverage guarantee)</span></span>
+<span id="cb13-8"><a href="#cb13-8" tabindex="-1"></a>pred<span class="sc">$</span>conformal_lower[[<span class="st">&quot;Mass&quot;</span>]]    <span class="co"># lower bound per species (original units)</span></span>
+<span id="cb13-9"><a href="#cb13-9" tabindex="-1"></a>pred<span class="sc">$</span>conformal_upper[[<span class="st">&quot;Mass&quot;</span>]]    <span class="co"># upper bound per species (original units)</span></span>
+<span id="cb13-10"><a href="#cb13-10" tabindex="-1"></a>pred<span class="sc">$</span>conformal_coverage           <span class="co"># empirical coverage on val set (target ≈ 0.95)</span></span></code></pre></div>
+<p>Expected output (values will vary by seed and convergence):</p>
+<pre><code>       Mass Beak.Length_Culmen Tarsus.Length Wing.Length
+t1  28.4150           14.2316       18.0923     136.421
+t2  41.2031           18.5034       21.3441     154.832
+...</code></pre>
+</div>
+<div id="step-7-evaluate-and-compare-baselines" class="section level2">
+<h2>Step 7: Evaluate and compare baselines</h2>
+<p>We compare the BM baseline to the GNN on the held-out test cells
+(both evaluated in z-score scale for comparability).</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a><span class="co"># BM baseline RMSE on test cells</span></span>
+<span id="cb15-2"><a href="#cb15-2" tabindex="-1"></a>eval_bm <span class="ot">&lt;-</span> <span class="fu">evaluate_imputation</span>(baseline<span class="sc">$</span>mu, pd<span class="sc">$</span>X_scaled, splits)</span>
+<span id="cb15-3"><a href="#cb15-3" tabindex="-1"></a>eval_bm[eval_bm<span class="sc">$</span>split <span class="sc">==</span> <span class="st">&quot;test&quot;</span>, <span class="fu">c</span>(<span class="st">&quot;trait&quot;</span>, <span class="st">&quot;n&quot;</span>, <span class="st">&quot;rmse&quot;</span>, <span class="st">&quot;pearson_r&quot;</span>)]</span></code></pre></div>
+<pre><code>               trait  n  rmse pearson_r
+Mass            Mass 56 0.872     0.611
+Beak.Length_Culmen Beak.Length_Culmen 56 0.901     0.582
+Tarsus.Length Tarsus.Length 56 0.863     0.628
+Wing.Length Wing.Length 56 0.884     0.595</code></pre>
+<div class="sourceCode" id="cb17"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a><span class="co"># GNN test RMSE stored in fit object</span></span>
+<span id="cb17-2"><a href="#cb17-2" tabindex="-1"></a><span class="fu">data.frame</span>(</span>
+<span id="cb17-3"><a href="#cb17-3" tabindex="-1"></a>  <span class="at">trait    =</span> fit<span class="sc">$</span>trait_names,</span>
+<span id="cb17-4"><a href="#cb17-4" tabindex="-1"></a>  <span class="at">bm_rmse  =</span> eval_bm<span class="sc">$</span>rmse[eval_bm<span class="sc">$</span>split <span class="sc">==</span> <span class="st">&quot;test&quot;</span>],</span>
+<span id="cb17-5"><a href="#cb17-5" tabindex="-1"></a>  <span class="at">gnn_rmse =</span> fit<span class="sc">$</span>test_rmse</span>
+<span id="cb17-6"><a href="#cb17-6" tabindex="-1"></a>)</span></code></pre></div>
+<pre><code>               trait bm_rmse gnn_rmse
+1               Mass   0.872    0.831
+2 Beak.Length_Culmen   0.901    0.856
+3      Tarsus.Length   0.863    0.822
+4        Wing.Length   0.884    0.841</code></pre>
+<p>In this example output, the GNN reduces test RMSE relative to the BM
+baseline. How large the improvement is depends on the trait, clade,
+missingness pattern, and validation split.</p>
+</div>
+<div id="step-8-visualise" class="section level2">
+<h2>Step 8: Visualise</h2>
+<div id="training-history" class="section level3">
+<h3>Training history</h3>
+<div class="sourceCode" id="cb19"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb19-1"><a href="#cb19-1" tabindex="-1"></a><span class="fu">plot</span>(fit, <span class="at">type =</span> <span class="st">&quot;history&quot;</span>)</span></code></pre></div>
+<p>This plots the validation RMSE over epochs, showing where early
+stopping triggered.</p>
+</div>
+<div id="uncertainty-ribbons" class="section level3">
+<h3>Uncertainty ribbons</h3>
+<div class="sourceCode" id="cb20"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" tabindex="-1"></a><span class="fu">plot</span>(pred, <span class="at">type =</span> <span class="st">&quot;intervals&quot;</span>, <span class="at">trait =</span> <span class="st">&quot;Mass&quot;</span>)</span></code></pre></div>
+<p>Species are sorted by predicted mass. The blue ribbon shows the
+conformal prediction interval when conformal scores are available. Grey
+points (if <code>truth</code> is supplied) show known values — a useful
+visual check of calibration.</p>
+</div>
+</div>
+<div id="experimental-analysis-aware-multiple-imputation" class="section level2">
+<h2>Experimental analysis-aware multiple imputation</h2>
+<p>Downstream inference requires imputations compatible with the
+substantive analysis. <code>multi_impute_analysis()</code> therefore
+receives the formula and model class before drawing one incomplete
+continuous covariate under MAR.</p>
+<p>A warning-free 6,000-task package campaign at clean SHA
+<code>2e3809d</code> passed all 24 method-by-term cells. Coverage was
+93.9%-96.3% and all pooled results were finite. This validates only the
+documented narrow scope; the interface remains experimental.</p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb21-1"><a href="#cb21-1" tabindex="-1"></a>analysis_data<span class="sc">$</span>z_sq <span class="ot">&lt;-</span> analysis_data<span class="sc">$</span>z<span class="sc">^</span><span class="dv">2</span></span>
+<span id="cb21-2"><a href="#cb21-2" tabindex="-1"></a></span>
+<span id="cb21-3"><a href="#cb21-3" tabindex="-1"></a>mi <span class="ot">&lt;-</span> <span class="fu">multi_impute_analysis</span>(</span>
+<span id="cb21-4"><a href="#cb21-4" tabindex="-1"></a>  <span class="at">data =</span> analysis_data,</span>
+<span id="cb21-5"><a href="#cb21-5" tabindex="-1"></a>  <span class="at">formula =</span> y <span class="sc">~</span> x <span class="sc">+</span> z,</span>
+<span id="cb21-6"><a href="#cb21-6" tabindex="-1"></a>  <span class="at">missing =</span> <span class="st">&quot;x&quot;</span>,</span>
+<span id="cb21-7"><a href="#cb21-7" tabindex="-1"></a>  <span class="at">model =</span> <span class="st">&quot;lm&quot;</span>,</span>
+<span id="cb21-8"><a href="#cb21-8" tabindex="-1"></a>  <span class="at">m =</span> <span class="dv">50</span><span class="dt">L</span>,</span>
+<span id="cb21-9"><a href="#cb21-9" tabindex="-1"></a>  <span class="at">auxiliary =</span> <span class="st">&quot;z_sq&quot;</span>,</span>
+<span id="cb21-10"><a href="#cb21-10" tabindex="-1"></a>  <span class="at">seed =</span> <span class="dv">1</span><span class="dt">L</span></span>
+<span id="cb21-11"><a href="#cb21-11" tabindex="-1"></a>)</span>
+<span id="cb21-12"><a href="#cb21-12" tabindex="-1"></a></span>
+<span id="cb21-13"><a href="#cb21-13" tabindex="-1"></a>fits <span class="ot">&lt;-</span> <span class="fu">with_imputations</span>(mi, <span class="cf">function</span>(d) <span class="fu">lm</span>(y <span class="sc">~</span> x <span class="sc">+</span> z, <span class="at">data =</span> d))</span>
+<span id="cb21-14"><a href="#cb21-14" tabindex="-1"></a><span class="fu">pool_mi</span>(fits)</span></code></pre></div>
+<p>The initial dispatch is deliberately narrow: proper Bayesian
+normal-regression MI for Gaussian <code>lm</code>, <code>smcfcs</code>
+for binomial-logit <code>glm</code>, and <code>jomo.smc</code> for a
+Gaussian <code>lmer</code> with one random intercept. Users must
+precompute auxiliary terms such as <code>z_sq</code>. Fixed effects are
+the only supported pooling targets.</p>
+<p>Conformal-width, Brownian/MC-dropout, and PMM draws remain
+experimental prediction diagnostics. They failed the downstream
+fixed-effect gate and must not be passed to
+<code>with_imputations()</code>/<code>pool_mi()</code> for
+inference.</p>
+</div>
+<div id="phylogenetic-tree-uncertainty" class="section level2">
+<h2>Phylogenetic tree uncertainty</h2>
+<p>Tree uncertainty was outside the analysis-aware validation campaign.
+<code>multi_impute_trees()</code> may be used descriptively to examine
+point-prediction sensitivity, but its stochastic datasets are
+unsupported for downstream inference and cannot currently be combined
+with <code>multi_impute_analysis()</code>.</p>
+</div>
+<div id="active-imputation-where-to-measure-next" class="section level2">
+<h2>Active imputation: where to measure next</h2>
+<p>When you can measure k more species but not all of them, which ones
+should you prioritise to maximally reduce imputation uncertainty across
+the rest of your tree? <code>suggest_next_observation()</code> answers
+this with a closed-form variance-reduction calculation built on the BM
+conditional MVN.</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" tabindex="-1"></a>res <span class="ot">&lt;-</span> <span class="fu">impute</span>(traits, tree)</span>
+<span id="cb22-2"><a href="#cb22-2" tabindex="-1"></a></span>
+<span id="cb22-3"><a href="#cb22-3" tabindex="-1"></a><span class="co"># Top-10 individual (species, trait) cells, ordered by expected</span></span>
+<span id="cb22-4"><a href="#cb22-4" tabindex="-1"></a><span class="co"># total variance reduction:</span></span>
+<span id="cb22-5"><a href="#cb22-5" tabindex="-1"></a><span class="fu">suggest_next_observation</span>(res, <span class="at">top_n =</span> <span class="dv">10</span>, <span class="at">by =</span> <span class="st">&quot;cell&quot;</span>)</span>
+<span id="cb22-6"><a href="#cb22-6" tabindex="-1"></a></span>
+<span id="cb22-7"><a href="#cb22-7" tabindex="-1"></a><span class="co"># Or aggregated by species (sum of variance reductions across the</span></span>
+<span id="cb22-8"><a href="#cb22-8" tabindex="-1"></a><span class="co"># species&#39; currently-missing continuous-family traits):</span></span>
+<span id="cb22-9"><a href="#cb22-9" tabindex="-1"></a><span class="fu">suggest_next_observation</span>(res, <span class="at">top_n =</span> <span class="dv">10</span>, <span class="at">by =</span> <span class="st">&quot;species&quot;</span>)</span></code></pre></div>
+<p>The <code>delta_var_total</code> column is the closed-form expected
+reduction in total predictive variance across all currently-missing
+cells if you observed that candidate next:</p>
+<p><span class="math display">\[
+\Delta V(s_{\text{new}}) = \sigma_t^2 \sum_{i \in \mathrm{miss}_t}
+\frac{D_{ik}^2}{\alpha_k}
+\]</span></p>
+<p>where <span class="math inline">\(D = R_{mm} - R_{mo} R_{oo}^{-1}
+R_{om}\)</span> is the residual matrix at currently-missing cells, <span class="math inline">\(\alpha_k = D_{kk}\)</span> is the current relative
+leverage of cell <span class="math inline">\(k\)</span>, and <span class="math inline">\(\sigma_t^2\)</span> is the REML BM variance. The
+formula is the standard active-learning variance-reduction bound (Cohn
+et al. 1996); applying it to phylogenetic trait imputation appears to be
+new.</p>
+<p><strong>Scope.</strong> <code>suggest_next_observation()</code> v2
+(2026-05-01) supports all eight pigauto trait types:</p>
+<ul>
+<li><strong>Variance reduction</strong> for continuous-family traits
+(<code>continuous</code>, <code>count</code>, <code>ordinal</code>,
+<code>proportion</code>) and the magnitude column of
+<code>zi_count</code>, computed by closed-form Sherman-Morrison rank-1
+update on the BM phylogenetic-correlation matrix.</li>
+<li><strong>Entropy reduction</strong> for <code>binary</code>,
+<code>categorical</code>, and the gate column of <code>zi_count</code>,
+computed by closed-form label-propagation posteriors.</li>
+<li><strong>Multi-component variance reduction</strong> (per-component
+BM, summed across the K CLR-z latent columns) for
+<code>multi_proportion</code>.</li>
+</ul>
+<p>For <code>zi_count</code> rows the output populates BOTH
+<code>delta_var_total</code> (probability-weighted magnitude variance
+reduction) AND <code>delta_entropy_total</code> (gate entropy
+reduction); the <code>metric</code> column is set to
+<code>&quot;variance&quot;</code> so rows sort on the magnitude scale. See
+<code>?suggest_next_observation</code> for full details.</p>
+<p><strong>Variance vs entropy are not directly comparable</strong> —
+the cross- metric ordering by <code>delta_var_total</code> is
+approximate. When you want a strict ranking on a single metric, filter
+by <code>metric</code> first or restrict <code>types</code> to
+continuous-family-only or discrete-only.</p>
+<p>Multi-obs (multiple observations per species) inputs are not
+supported and error with a clear message.</p>
+</div>
+<div id="optional-advanced-features" class="section level2">
+<h2>Optional advanced features</h2>
+<div id="phylogenetic-signal-gating" class="section level3">
+<h3>Phylogenetic-signal gating</h3>
+<p><code>impute()</code> runs a per-trait Pagel’s-λ check before
+training and routes traits with very weak phylogenetic signal to the
+<strong>grand-mean corner</strong> of the safety-floor simplex (i.e., it
+predicts the column mean for those traits). This protects against
+over-fitting noise on traits where the phylogeny carries little
+information.</p>
+<p>It is on by default since v0.9.1.9003. The two arguments you can
+tune:</p>
+<div class="sourceCode" id="cb23"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb23-1"><a href="#cb23-1" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">impute</span>(traits, tree,</span>
+<span id="cb23-2"><a href="#cb23-2" tabindex="-1"></a>                 <span class="at">phylo_signal_gate     =</span> <span class="cn">TRUE</span>,   <span class="co"># default</span></span>
+<span id="cb23-3"><a href="#cb23-3" tabindex="-1"></a>                 <span class="at">phylo_signal_threshold =</span> <span class="fl">0.2</span>,   <span class="co"># default; min lambda to keep BM/GNN</span></span>
+<span id="cb23-4"><a href="#cb23-4" tabindex="-1"></a>                 <span class="at">phylo_signal_method   =</span> <span class="st">&quot;lambda&quot;</span>)</span></code></pre></div>
+<p>If a trait’s λ falls below <code>phylo_signal_threshold</code>, the
+calibrated gate routes it to the grand-mean corner.
+<code>print(fit)</code> reports which traits triggered the gate and
+their λ values.</p>
+<p>To disable (e.g., when comparing against an older snapshot or for
+benchmarking purposes):</p>
+<div class="sourceCode" id="cb24"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb24-1"><a href="#cb24-1" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">impute</span>(traits, tree, <span class="at">phylo_signal_gate =</span> <span class="cn">FALSE</span>)</span></code></pre></div>
+</div>
+<div id="assembling-covariates-from-public-data" class="section level3">
+<h3>Assembling covariates from public data</h3>
+<p>Two helpers are bundled for the common case of building a covariate
+matrix from species-level environmental data:</p>
+<div class="sourceCode" id="cb25"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb25-1"><a href="#cb25-1" tabindex="-1"></a><span class="co"># Step 1: GBIF occurrence centroids (median lat/lon across cleaned points)</span></span>
+<span id="cb25-2"><a href="#cb25-2" tabindex="-1"></a>gbif <span class="ot">&lt;-</span> <span class="fu">pull_gbif_centroids</span>(<span class="at">species          =</span> <span class="fu">rownames</span>(my_traits),</span>
+<span id="cb25-3"><a href="#cb25-3" tabindex="-1"></a>                            <span class="at">cache_dir        =</span> <span class="st">&quot;cache/gbif&quot;</span>,</span>
+<span id="cb25-4"><a href="#cb25-4" tabindex="-1"></a>                            <span class="at">occurrence_limit =</span> <span class="dv">500</span><span class="dt">L</span>)</span>
+<span id="cb25-5"><a href="#cb25-5" tabindex="-1"></a><span class="co">#&gt; data.frame with columns species, centroid_lat, centroid_lon, n_occurrences</span></span>
+<span id="cb25-6"><a href="#cb25-6" tabindex="-1"></a></span>
+<span id="cb25-7"><a href="#cb25-7" tabindex="-1"></a><span class="co"># Step 2: WorldClim bioclim summaries (median + IQR of all 19 bio variables</span></span>
+<span id="cb25-8"><a href="#cb25-8" tabindex="-1"></a><span class="co"># across each species&#39; GBIF occurrences)</span></span>
+<span id="cb25-9"><a href="#cb25-9" tabindex="-1"></a>clim <span class="ot">&lt;-</span> <span class="fu">pull_worldclim_per_species</span>(<span class="at">species             =</span> <span class="fu">rownames</span>(my_traits),</span>
+<span id="cb25-10"><a href="#cb25-10" tabindex="-1"></a>                                    <span class="at">gbif_cache_dir      =</span> <span class="st">&quot;cache/gbif&quot;</span>,</span>
+<span id="cb25-11"><a href="#cb25-11" tabindex="-1"></a>                                    <span class="at">worldclim_cache_dir =</span> <span class="st">&quot;cache/worldclim&quot;</span>,</span>
+<span id="cb25-12"><a href="#cb25-12" tabindex="-1"></a>                                    <span class="at">resolution          =</span> <span class="st">&quot;10m&quot;</span>)</span>
+<span id="cb25-13"><a href="#cb25-13" tabindex="-1"></a><span class="co">#&gt; data.frame with bio1..bio19 medians + IQRs + n_extracted per species</span></span>
+<span id="cb25-14"><a href="#cb25-14" tabindex="-1"></a></span>
+<span id="cb25-15"><a href="#cb25-15" tabindex="-1"></a><span class="co"># Step 3: hand the whole climate frame to impute() as covariates</span></span>
+<span id="cb25-16"><a href="#cb25-16" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">impute</span>(my_traits, my_tree, <span class="at">covariates =</span> clim)</span></code></pre></div>
+<p>Caching is on by default — both helpers write to the
+<code>cache_dir</code> you supply and re-use existing extracts on
+subsequent runs. GBIF requires no API key. WorldClim raster downloads
+are ~50–500 MB depending on resolution and are cached in
+<code>worldclim_cache_dir</code>. Both functions error with a clear
+message if the optional dependencies (<code>rgbif</code>,
+<code>terra</code>) are not installed.</p>
+<p>For a worked end-to-end example with covariates, use this section
+alongside <code>?impute</code>, <code>?pull_gbif_centroids</code>, and
+<code>?pull_worldclim_per_species</code>. The old static covariate
+walk-through is being refreshed and is not the current source of
+truth.</p>
+</div>
+</div>
+<div id="tips-and-next-steps" class="section level2">
+<h2>Tips and next steps</h2>
+<p><strong>Use GPU if available.</strong> pigauto automatically selects
+CUDA &gt; MPS &gt; CPU. Check availability with:</p>
+<div class="sourceCode" id="cb26"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb26-1"><a href="#cb26-1" tabindex="-1"></a>torch<span class="sc">::</span><span class="fu">cuda_is_available</span>()       <span class="co"># NVIDIA GPU</span></span>
+<span id="cb26-2"><a href="#cb26-2" tabindex="-1"></a>torch<span class="sc">::</span><span class="fu">backends_mps_is_available</span>() <span class="co"># Apple Silicon GPU</span></span></code></pre></div>
+<p><strong>Cache the phylogenetic graph.</strong> For repeated
+experiments, save time by writing the graph to disk:</p>
+<div class="sourceCode" id="cb27"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb27-1"><a href="#cb27-1" tabindex="-1"></a>graph <span class="ot">&lt;-</span> <span class="fu">build_phylo_graph</span>(tree300, <span class="at">k_eigen =</span> <span class="dv">8</span>, <span class="at">cache_path =</span> <span class="st">&quot;tree300_graph.rds&quot;</span>)</span></code></pre></div>
+<p><strong>Large trees (N &gt; 2000).</strong>
+<code>build_phylo_graph()</code> computes a dense N × N cophenetic
+distance matrix and a Laplacian eigendecomposition. The
+eigendecomposition is O(N³) in the worst case, but
+<code>k_eigen = &quot;auto&quot;</code> caps the number of eigenvectors at 32 (the
+default for all trees), which keeps computation tractable in practice —
+pigauto has been tested up to 10,000 species on a standard laptop. The
+main cost at very large N is memory for the N × N distance matrix (~800
+MB at N = 10,000). If memory is tight, prune to a clade of interest or
+watch for a future release that switches to a sparse Lanczos
+eigensolver.</p>
+<p><strong>Supplying your own data.</strong> The workflow above works
+for any phylogenetic tree and trait matrix:</p>
+<div class="sourceCode" id="cb28"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb28-1"><a href="#cb28-1" tabindex="-1"></a>tree   <span class="ot">&lt;-</span> ape<span class="sc">::</span><span class="fu">read.tree</span>(<span class="st">&quot;my_phylogeny.nwk&quot;</span>)</span>
+<span id="cb28-2"><a href="#cb28-2" tabindex="-1"></a>traits <span class="ot">&lt;-</span> <span class="fu">read_traits</span>(<span class="st">&quot;my_traits.csv&quot;</span>, <span class="at">species_col =</span> <span class="st">&quot;species&quot;</span>)</span>
+<span id="cb28-3"><a href="#cb28-3" tabindex="-1"></a>pd     <span class="ot">&lt;-</span> <span class="fu">preprocess_traits</span>(traits, tree)</span>
+<span id="cb28-4"><a href="#cb28-4" tabindex="-1"></a><span class="co"># ...proceed as above</span></span></code></pre></div>
+<p>Trait columns can be any of eight supported types. Five are
+auto-detected from R column class: <code>numeric</code> (continuous),
+<code>integer</code> (count), <code>factor</code> with 2 levels
+(binary), <code>factor</code> with &gt;2 levels (categorical), and
+<code>ordered</code> (ordinal). Three require an explicit declaration
+because they cannot be inferred from class alone: <code>numeric</code>
+(0–1) with <code>trait_types = &quot;proportion&quot;</code> for bounded
+proportions; <code>integer</code> with
+<code>trait_types = &quot;zi_count&quot;</code> for zero-inflated counts; and K
+<code>numeric</code> columns declared via the
+<code>multi_proportion_groups</code> argument for compositional
+(simplex) data whose rows sum to 1. pigauto reads column classes to
+decide how each trait is encoded and imputed. The species names in
+<code>traits</code> must overlap with tip labels in <code>tree</code>
+(partial overlap is allowed; unmatched species are dropped with a
+warning).</p>
+</div>
+<div id="references" class="section level2">
+<h2>References</h2>
+<ul>
+<li>Tobias, J.A. et al. (2022). AVONET: morphological, ecological and
+geographical data for all birds. <em>Ecology Letters</em>, 25,
+581–597.</li>
+<li>Jetz, W. et al. (2012). The global diversity of birds in space and
+time. <em>Nature</em>, 491, 444–448.</li>
+<li>Goolsby, E.W., Bruggeman, J. &amp; Ané, C. (2017). Rphylopars: fast
+multivariate phylogenetic comparative methods for missing data and
+within-species variation. <em>Methods in Ecology and Evolution</em>, 8,
+22–27. (pigauto’s internal BM baseline implements the same
+conditional-MVN approach.)</li>
+<li>Cohn, D.A., Ghahramani, Z. &amp; Jordan, M.I. (1996). Active
+learning with statistical models. <em>Journal of Artificial Intelligence
+Research</em>, 4, 129–145. (Variance-reduction framework that
+<code>suggest_next_observation()</code> adapts to the phylogenetic
+setting.)</li>
+</ul>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>
