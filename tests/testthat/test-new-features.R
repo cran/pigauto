@@ -25,7 +25,7 @@ build_quick_fit <- function(seed = 100) {
   spl <- make_missing_splits(pd$X_scaled, seed = seed, trait_map = pd$trait_map)
   fit <- fit_pigauto(pd, td$tree, splits = spl,
                      epochs = 20L, eval_every = 10L, patience = 5L,
-                     verbose = FALSE, seed = seed)
+                     verbose = FALSE, seed = seed, gnn = TRUE)
   list(fit = fit, pd = pd, spl = spl, tree = td$tree)
 }
 
@@ -51,8 +51,9 @@ test_that("evaluate returns a data.frame with expected columns", {
   expect_true(all(is.finite(eval_df$value) | is.na(eval_df$value)))
 })
 
-test_that("evaluate errors when data is missing", {
+test_that("evaluate errors when neither data nor stored X_scaled is available", {
   obj <- build_quick_fit(seed = 102)
+  obj$fit$X_scaled <- NULL
   expect_error(evaluate(obj$fit), "data.*required")
 })
 
@@ -127,6 +128,7 @@ test_that("plot.pigauto_fit conformal produces plots without error", {
 
 test_that("pigauto_report creates an HTML file from pigauto_result", {
   td <- make_test_data_new(n = 20, seed = 109)
+  td$df$tr1[[1L]] <- NA_real_
   result <- impute(td$df, td$tree, epochs = 20L, verbose = FALSE, seed = 109)
 
   expect_s3_class(result, "pigauto_result")
@@ -279,13 +281,14 @@ test_that("cross_validate print and summary methods work", {
 test_that("simulate_benchmark runs and returns expected structure", {
   bench <- simulate_benchmark(
     n_species = 20, n_traits = 2, scenarios = "BM",
-    n_reps = 1, epochs = 20L, verbose = FALSE
+    n_reps = 1, epochs = 20L, verbose = FALSE, gnn = FALSE
   )
 
   expect_s3_class(bench, "pigauto_benchmark")
   expect_true("results" %in% names(bench))
   expect_true("summary" %in% names(bench))
   expect_s3_class(bench$results, "data.frame")
+  expect_gt(nrow(bench$results), 0L)
   expect_true(all(c("scenario", "method", "trait", "metric", "value")
                   %in% names(bench$results)))
   expect_equal(bench$n_species, 20L)
@@ -353,7 +356,7 @@ test_that("impute() accepts covariates and threads them through the pipeline", {
     precipitation = rnorm(n, 1000, 200)
   )
 
-  res <- impute(df, tree, covariates = covs, epochs = 20L,
+  res <- impute(df, tree, covariates = covs, epochs = 20L, gnn = TRUE,
                 verbose = FALSE, seed = 500L,
                 eval_every = 10L, patience = 5L)
 
@@ -388,11 +391,12 @@ test_that("covariates with NAs are rejected", {
   tree <- ape::rtree(20)
   sp <- tree$tip.label
   df <- data.frame(row.names = sp, y = rnorm(20))
+  df$y[[1L]] <- NA_real_
 
   covs_bad <- data.frame(temp = c(NA, rnorm(19)))
   expect_error(
     impute(df, tree, covariates = covs_bad, epochs = 10L, verbose = FALSE),
-    regexp = "fully observed"
+    regexp = "fully observed.*covariates|covariates.*fully observed"
   )
 })
 
@@ -401,6 +405,7 @@ test_that("covariates with wrong row count are rejected", {
   tree <- ape::rtree(20)
   sp <- tree$tip.label
   df <- data.frame(row.names = sp, y = rnorm(20))
+  df$y[[1L]] <- NA_real_
 
   covs_bad <- data.frame(temp = rnorm(10))  # wrong n
   expect_error(
@@ -512,12 +517,13 @@ test_that("multi-obs + covariates: obs-level refinement produces within-species 
     species = rep(tree$tip.label, each = 4),
     y = abs(rnorm(40)) + 0.5
   )
+  df$y[c(2L, 18L)] <- NA_real_
   covs <- data.frame(
     temp = rep(c(10, 20, 30, 40), times = 10)  # systematic within-species variation
   )
 
   result <- impute(df, tree, species_col = "species",
-                   covariates = covs,
+                   covariates = covs, gnn = TRUE,
                    epochs = 30L, verbose = FALSE, seed = 602L,
                    eval_every = 10L, patience = 5L,
                    missing_frac = 0.25)
@@ -546,6 +552,7 @@ test_that("multi-obs WITHOUT covariates: within-species predictions are uniform"
     species = rep(tree$tip.label, each = 4),
     y = abs(rnorm(40)) + 0.5
   )
+  df$y[c(2L, 18L)] <- NA_real_
   # No covariates supplied
 
   result <- impute(df, tree, species_col = "species",
@@ -572,6 +579,7 @@ test_that("multi-obs + covariates: fit stores multi_obs flag and obs metadata", 
     sp = rep(tree$tip.label, each = 2),
     val = abs(rnorm(n_obs)) + 0.5
   )
+  df$val[[3L]] <- NA_real_
   covs <- data.frame(env = rnorm(n_obs))
 
   result <- impute(df, tree, species_col = "sp",
@@ -599,6 +607,7 @@ test_that("use_trait_attention=TRUE builds, trains, and predicts (smoke)", {
   skip_if_no_libtorch()
 
   td  <- make_test_data_new(n = 30L, seed = 730L)
+  td$df[1L, 1L] <- NA
   result <- impute(td$df, td$tree,
                    use_trait_attention = TRUE,
                    n_trait_heads       = 2L,
@@ -621,6 +630,7 @@ test_that("use_trait_attention default FALSE is backward compatible", {
   skip_if_no_libtorch()
 
   td <- make_test_data_new(n = 30L, seed = 731L)
+  td$df[1L, 1L] <- NA
   result <- impute(td$df, td$tree,
                    epochs     = 20L,
                    eval_every = 10L,

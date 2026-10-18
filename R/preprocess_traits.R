@@ -97,7 +97,9 @@
 #' @param log_transform logical.  Legacy parameter: if \code{TRUE} and
 #'   \code{log_cols} is \code{NULL}, log-transform all continuous traits
 #'   with all-positive values.  Overridden by \code{log_cols} when both
-#'   are supplied.
+#'   are supplied.  Traits already on a log scale should not be logged
+#'   again: set \code{log_transform = FALSE} or leave them out of
+#'   \code{log_cols} (see \code{\link{impute}}).
 #' @param center logical. Subtract column means for continuous/count/ordinal?
 #'   Default \code{TRUE}.
 #' @param scale logical. Divide by column SDs for continuous/count/ordinal?
@@ -105,8 +107,14 @@
 #' @param covariates data.frame or numeric matrix of environmental covariates.
 #'   Covariates are conditioners: they inform imputation but are not themselves
 #'   imputed, so they must be \strong{fully observed} (no NAs — if a variable
-#'   has missing values, put it in \code{traits} instead).  Must have the same
-#'   number of rows as \code{traits} after alignment to the tree.
+#'   has missing values, put it in \code{traits} instead).  Rows are aligned
+#'   to the same species / observation order as \code{X_scaled} after traits
+#'   are matched to the tree.  Single-obs: rownames should match
+#'   \code{tree$tip.label} (they are reordered to tip order).  Multi-obs:
+#'   include the same \code{species_col} to match observation rows by species
+#'   identity.  Unnamed covariates are assumed to share the input-row order of
+#'   \code{traits} and receive the same drop / reorder.  Matching
+#'   \code{nrow} alone is not enough — unmatched species names are an error.
 #'   \describe{
 #'     \item{Numeric / integer columns}{z-scored automatically.}
 #'     \item{Factor / ordered columns}{one-hot encoded (K binary columns per
@@ -168,6 +176,11 @@ preprocess_traits <- function(traits, tree, species_col = NULL,
                               covariates = NULL) {
   if (!is.data.frame(traits)) stop("'traits' must be a data.frame.")
   if (!inherits(tree, "phylo")) stop("'tree' must be a phylo object.")
+
+  # Keep input identity before dropping data-only species.  Internal rows are
+  # later reordered to tree order, while build_completed() must always target
+  # the user's original rows.  Synthetic tree-only rows receive NA below.
+  original_row_id <- seq_len(nrow(traits))
 
   # Phylogenetic imputation needs >= 2 tips to define any signal.  A
   # 1-tip tree silently produces a 1-row pigauto_data that downstream
@@ -244,6 +257,7 @@ preprocess_traits <- function(traits, tree, species_col = NULL,
     keep_rows <- obs_species_raw %in% tree$tip.label
     traits <- traits[keep_rows, , drop = FALSE]
     obs_species_raw <- obs_species_raw[keep_rows]
+    original_row_id <- original_row_id[keep_rows]
     unique_species <- unique(obs_species_raw)
   }
   # If alignment leaves zero species in common, phylogenetic imputation
@@ -274,12 +288,12 @@ preprocess_traits <- function(traits, tree, species_col = NULL,
     # internal position k.  Used by `build_completed()` (and any downstream
     # caller that needs to re-align internal-order results back to the
     # user's input row order).
-    input_row_order <- as.integer(row_order)
+    input_row_order <- as.integer(original_row_id[row_order])
 
     # Add all-NA rows for tree tips missing from data
     missing_tips <- tree$tip.label[!in_data]
     if (length(missing_tips) > 0) {
-      na_rows <- traits[rep(NA, length(missing_tips)), , drop = FALSE]
+      na_rows <- traits[rep(NA_integer_, length(missing_tips)), , drop = FALSE]
       rownames(na_rows) <- NULL
       traits <- rbind(traits, na_rows)
       obs_species_raw <- c(obs_species_raw, missing_tips)
@@ -303,7 +317,7 @@ preprocess_traits <- function(traits, tree, species_col = NULL,
     # internal position k.  `idx[k]` is the row of `traits` (= input row
     # index, since rownames are preserved at this point) that maps to
     # tree$tip.label[k].  When a tip has no input row, idx[k] = NA.
-    input_row_order <- as.integer(idx)
+    input_row_order <- as.integer(original_row_id[idx])
     traits <- traits[idx, , drop = FALSE]
     rownames(traits) <- tree$tip.label
 
@@ -407,6 +421,15 @@ preprocess_traits <- function(traits, tree, species_col = NULL,
       covariates <- as.data.frame(covariates)
     }
 
+    covariates <- align_covariates_to_obs(
+      covariates       = covariates,
+      species_names    = species_names,
+      obs_species      = if (multi_obs) obs_species else species_names,
+      multi_obs        = multi_obs,
+      species_col      = species_col,
+      input_row_order  = input_row_order
+    )
+
     if (nrow(covariates) != n_obs) {
       stop("`covariates` has ", nrow(covariates), " rows but traits has ",
            n_obs, " rows after alignment. They must match.", call. = FALSE)
@@ -415,6 +438,17 @@ preprocess_traits <- function(traits, tree, species_col = NULL,
       stop("`covariates` must be fully observed (no NAs). ",
            "If a covariate has missing values, include it in `traits` ",
            "instead so pigauto can impute it jointly.",
+           call. = FALSE)
+    }
+    for (j in seq_along(covariates)) {
+      col <- covariates[[j]]
+      if (!is.numeric(col)) next
+      bad <- which(!is.finite(col))
+      if (!length(bad)) next
+      nm <- names(covariates)[j]
+      if (is.null(nm) || is.na(nm) || !nzchar(nm)) nm <- paste0("[,", j, "]")
+      stop("Column '", nm, "' in `covariates` contains a non-finite value (",
+           col[[bad[[1L]]]], "). Covariates must be finite.",
            call. = FALSE)
     }
 
@@ -504,12 +538,117 @@ preprocess_traits <- function(traits, tree, species_col = NULL,
 }
 
 
+# ---- Internal: align covariates to X_scaled / obs order ---------------------
+# Named single-obs covariates → match species_names (tree tip order).
+# Multi-obs + species_col → match obs_species, consuming rows per species.
+# Unnamed → same input_row_order permutation as traits.
+align_covariates_to_obs <- function(covariates,
+                                    species_names,
+                                    obs_species,
+                                    multi_obs,
+                                    species_col,
+                                    input_row_order) {
+  target_sp <- if (is.null(obs_species)) species_names else obs_species
+  n_target  <- length(target_sp)
+  n_cov     <- nrow(covariates)
+  rn        <- rownames(covariates)
+  trivial_rn <- is.null(rn) || identical(rn, as.character(seq_len(n_cov)))
+
+  id_col <- NULL
+  if (!is.null(species_col) && species_col %in% names(covariates)) {
+    id_col <- species_col
+  }
+
+  drop_id_col <- function(x, col) {
+    if (is.null(col) || !col %in% names(x)) return(x)
+    x[, setdiff(names(x), col), drop = FALSE]
+  }
+
+  stop_unmatched <- function(missing, what) {
+    stop("Cannot match covariate rows to ", what, ". ",
+         "Unmatched species: ",
+         paste(utils::head(missing, 8L), collapse = ", "),
+         if (length(missing) > 8L) ", ..." else "",
+         ". Matching nrow alone is not enough; names must identify ",
+         "the same species as aligned traits.",
+         call. = FALSE)
+  }
+
+  if (!multi_obs && !trivial_rn) {
+    idx <- match(target_sp, rn)
+    if (anyNA(idx)) {
+      stop_unmatched(target_sp[is.na(idx)], "species")
+    }
+    return(drop_id_col(covariates[idx, , drop = FALSE], id_col))
+  }
+
+  if (!is.null(id_col)) {
+    cov_sp <- as.character(covariates[[id_col]])
+    cov_data <- drop_id_col(covariates, id_col)
+    used <- logical(n_cov)
+    idx  <- integer(n_target)
+    for (i in seq_len(n_target)) {
+      hit <- which(!used & cov_sp == target_sp[[i]])
+      if (!length(hit)) {
+        stop_unmatched(target_sp[[i]], "observations")
+      }
+      idx[[i]] <- hit[[1L]]
+      used[[idx[[i]]]] <- TRUE
+    }
+    return(cov_data[idx, , drop = FALSE])
+  }
+
+  if (anyNA(input_row_order) || n_cov < max(input_row_order, na.rm = TRUE)) {
+    stop("`covariates` has ", n_cov, " rows but traits has ",
+         n_target, " rows after alignment. They must match ",
+         "(unnamed covariates follow the input-row order of `traits`).",
+         call. = FALSE)
+  }
+  covariates[input_row_order, , drop = FALSE]
+}
+
+
 # ---- Internal: detect trait types -------------------------------------------
+
+.validate_declared_trait_type <- function(nm, x, tp) {
+  obs <- x[!is.na(x)]
+  ok <- switch(
+    tp,
+    binary = is.logical(x) ||
+      (is.factor(x) && nlevels(x) == 2L) ||
+      (is.numeric(x) && length(obs) > 0L && all(obs %in% c(0, 1))),
+    categorical = is.factor(x) && !is.ordered(x) && nlevels(x) > 2L,
+    ordinal = is.ordered(x),
+    continuous = is.numeric(x) && !is.factor(x),
+    count = is.numeric(x) && !is.factor(x),
+    proportion = is.numeric(x) && !is.factor(x),
+    zi_count = is.numeric(x) && !is.factor(x),
+    TRUE
+  )
+  if (!isTRUE(ok)) {
+    stop("Trait '", nm, "' is declared \"", tp, "\" but the column ",
+         "contradicts that type.", call. = FALSE)
+  }
+  invisible(TRUE)
+}
 
 #' @keywords internal
 detect_trait_types <- function(traits, overrides = NULL) {
   types <- character(ncol(traits))
   names(types) <- colnames(traits)
+  auto_count_cols <- character(0)
+  neg_int_cols    <- character(0)
+
+  if (!is.null(overrides)) {
+    if (is.null(names(overrides)) || any(!nzchar(names(overrides)))) {
+      stop("'trait_types' must be a named character vector.", call. = FALSE)
+    }
+    unknown <- setdiff(names(overrides), colnames(traits))
+    if (length(unknown)) {
+      stop("'trait_types' names not found in trait columns: ",
+           paste(unknown, collapse = ", "), ".", call. = FALSE)
+    }
+  }
 
   for (nm in colnames(traits)) {
     x <- traits[[nm]]
@@ -518,6 +657,7 @@ detect_trait_types <- function(traits, overrides = NULL) {
                              c("continuous", "binary", "categorical",
                                "ordinal", "count", "proportion",
                                "zi_count"))
+      .validate_declared_trait_type(nm, x, types[nm])
       next
     }
     if (is.ordered(x)) {
@@ -527,13 +667,44 @@ detect_trait_types <- function(traits, overrides = NULL) {
       nlev <- nlevels(x)
       types[nm] <- if (nlev == 2) "binary" else "categorical"
     } else if (is.integer(x)) {
-      types[nm] <- "count"
+      # A count cannot be negative.  Without this guard a negative integer
+      # column auto-detects as "count" and its log1p encoding produces NaN
+      # (P1-13).  This is a fail-closed correction, not a heuristic: the
+      # data contradict the type.
+      if (any(x < 0, na.rm = TRUE)) {
+        types[nm] <- "continuous"
+        neg_int_cols <- c(neg_int_cols, nm)
+      } else {
+        types[nm] <- "count"
+        auto_count_cols <- c(auto_count_cols, nm)
+      }
     } else if (is.numeric(x)) {
       types[nm] <- "continuous"
     } else {
       stop("Cannot determine type for column '", nm, "' (class: ",
            paste(class(x), collapse = "/"), ").")
     }
+  }
+
+  # P1-13: `read.csv()` returns whole-number columns as integer, so a
+  # continuous trait measured in whole units silently becomes a "count"
+  # (log1p-encoded, count semantics downstream).  Auto-detection cannot
+  # tell the two apart from storage class alone, so surface the decision
+  # rather than making it silently.
+  # A message, not a warning: genuine count traits are common, and warning on
+  # every one of them would cry wolf (and trip `expect_silent()` tests).  The
+  # point is to make the inference visible, not to alarm.
+  if (length(auto_count_cols)) {
+    message("Auto-detected trait type \"count\" (log1p-encoded) for integer ",
+            "column(s): ", paste(auto_count_cols, collapse = ", "),
+            ". If any is a continuous measurement stored as whole numbers ",
+            "(common after read.csv), override it: trait_types = c(",
+            auto_count_cols[1], " = \"continuous\").")
+  }
+  if (length(neg_int_cols)) {
+    message("Integer column(s) with negative values treated as continuous, ",
+            "not count: ", paste(neg_int_cols, collapse = ", "),
+            " (a count cannot be negative).")
   }
   types
 }
@@ -584,7 +755,20 @@ build_trait_map <- function(traits, types, log_set, center, scale,
       }
 
     } else if (tp == "count") {
-      vals <- log1p(as.numeric(x))
+      # P1-10 fail-closed: count encoding is log1p, so a negative value
+      # would silently become NaN and propagate through the whole latent
+      # matrix. Auto-detection now routes negative integers to continuous,
+      # but an explicit trait_types = c(x = "count") can still contradict
+      # the data — refuse rather than encode nonsense.
+      xnum <- as.numeric(x)
+      if (any(xnum < 0, na.rm = TRUE)) {
+        stop("Trait '", nm, "' is typed \"count\" but contains negative ",
+             "value(s) (min = ", min(xnum, na.rm = TRUE), "). Counts cannot ",
+             "be negative and are log1p-encoded, which would produce NaN. ",
+             "Use trait_types = c(", nm, " = \"continuous\") instead.",
+             call. = FALSE)
+      }
+      vals <- log1p(xnum)
       m <- if (center && length(vals) > 0) mean(vals) else 0
       s <- if (scale && length(vals) > 1) stats::sd(vals) else 1
       if (s == 0) s <- 1
@@ -640,8 +824,22 @@ build_trait_map <- function(traits, types, log_set, center, scale,
       entry$sd            <- NA_real_
 
     } else if (tp == "proportion") {
+      # P1-10 fail-closed: the 0.001/0.999 clamp exists to keep qlogis()
+      # finite at exact 0 and 1 — NOT to absorb out-of-range data. Values
+      # like 1.5 or -0.3 (or a 0-100 percentage column mistyped as a
+      # proportion) were silently squashed to the boundary and encoded as
+      # if they were legitimate. Refuse them; keep clamping the boundary.
+      xnum <- as.numeric(x)
+      bad <- which(is.finite(xnum) & (xnum < 0 | xnum > 1))
+      if (length(bad)) {
+        rng <- range(xnum[bad])
+        stop("Trait '", nm, "' is typed \"proportion\" but ", length(bad),
+             " value(s) fall outside [0, 1] (range ", rng[1], " to ", rng[2],
+             "). If these are percentages, divide by 100; if the trait is ",
+             "unbounded, use \"continuous\".", call. = FALSE)
+      }
       # Logit transform: qlogis(clamp(x, 0.001, 0.999)), then z-score
-      vals <- stats::qlogis(pmin(pmax(as.numeric(x), 0.001), 0.999))
+      vals <- stats::qlogis(pmin(pmax(xnum, 0.001), 0.999))
       m <- if (center && length(vals) > 0) mean(vals) else 0
       s <- if (scale && length(vals) > 1) stats::sd(vals) else 1
       if (s == 0) s <- 1
@@ -695,6 +893,31 @@ build_trait_map <- function(traits, types, log_set, center, scale,
       # Only use rows with NO NAs across the group for fitting mean/sd
       complete_rows <- stats::complete.cases(mat_raw)
       mat_fit <- mat_raw[complete_rows, , drop = FALSE]
+
+      # P1-10 fail-closed: the group is documented as summing to 1, but
+      # nothing enforced it. The eps-clamp + renormalise below will happily
+      # turn ANY complete row into a simplex point — including a row of all
+      # zeros (which becomes a uniform composition invented from no data)
+      # and a 0-100 percentage row (silently rescaled). Both then encode as
+      # if legitimate. Check before renormalising.
+      if (nrow(mat_fit) > 0L) {
+        if (any(mat_fit < 0, na.rm = TRUE)) {
+          stop("multi_proportion group '", gnm, "' contains negative value(s) ",
+               "(min = ", min(mat_fit, na.rm = TRUE), "). Compositional ",
+               "components must be non-negative.", call. = FALSE)
+        }
+        rs_check <- rowSums(mat_fit)
+        bad <- which(abs(rs_check - 1) > 0.01)
+        if (length(bad)) {
+          stop("multi_proportion group '", gnm, "' has ", length(bad),
+               " complete row(s) whose components do not sum to 1 ",
+               "(observed sums range ", signif(min(rs_check[bad]), 4), " to ",
+               signif(max(rs_check[bad]), 4), "; tolerance 1%). ",
+               "If these are percentages, divide by 100; if a row is entirely ",
+               "unobserved, set its components to NA rather than 0.",
+               call. = FALSE)
+        }
+      }
 
       # Handle zeros: replace with eps, re-normalise so rows still sum to ~1
       if (nrow(mat_fit) > 0L) {

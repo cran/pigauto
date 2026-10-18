@@ -99,7 +99,7 @@ test_that("predict.pigauto_fit uses observed latent cells as DAE context", {
   pd  <- preprocess_traits(td$df, td$tree)
   spl <- make_missing_splits(pd$X_scaled, missing_frac = 0.1,
                              seed = 20260511, trait_map = pd$trait_map)
-  fit <- fit_pigauto(pd, td$tree, splits = spl,
+  fit <- fit_pigauto(pd, td$tree, splits = spl, gnn = TRUE,
                      epochs = 2L, eval_every = 1L, patience = 2L,
                      refine_steps = 1L, dropout = 0,
                      use_transformer_blocks = FALSE,
@@ -170,7 +170,9 @@ test_that("predict.pigauto_fit can mask held-out cells from DAE context", {
   expect_equal(pred_shifted, pred_ref, tolerance = 1e-6)
 })
 
-test_that("predict.pigauto_fit adds cov_linear fixed effects outside the blend", {
+# This synthetic fixture has the shape of a pre-transformer saved fit. It does
+# not load an object serialized by an older package version.
+test_that("predict.pigauto_fit reconstructs legacy-shaped attention fits", {
   skip_if_no_libtorch()
 
   n <- 4L
@@ -181,7 +183,7 @@ test_that("predict.pigauto_fit adds cov_linear fixed effects outside the blend",
   model <- ResidualPhyloDAE(
     input_dim = 1L, hidden_dim = 4L, coord_dim = 1L, cov_dim = 3L,
     per_column_rs = TRUE, n_gnn_layers = 1L, gate_cap = 0.8,
-    use_attention = FALSE, n_user_cov = 1L, dropout = 0,
+    use_attention = TRUE, n_user_cov = 1L, dropout = 0,
     use_transformer_blocks = FALSE, n_heads = 1L, ffn_mult = 1L
   )
   torch::with_no_grad({
@@ -202,9 +204,8 @@ test_that("predict.pigauto_fit adds cov_linear fixed effects outside the blend",
       model_config = list(
         input_dim = 1L, hidden_dim = 4L, k_eigen = 1L, cov_dim = 3L,
         per_column_rs = TRUE, n_gnn_layers = 1L, gate_cap = 0.8,
-        use_attention = FALSE, n_user_cov = 1L, dropout = 0,
-        refine_steps = 1L, use_transformer_blocks = FALSE,
-        n_heads = 1L, ffn_mult = 1L
+        use_attention = TRUE, n_user_cov = 1L, dropout = 0,
+        refine_steps = 1L
       ),
       graph = list(coords = matrix(0, n, 1), adj = diag(n), D_sq = NULL),
       baseline = list(
@@ -237,6 +238,10 @@ test_that("predict.pigauto_fit adds cov_linear fixed effects outside the blend",
     ),
     class = "pigauto_fit"
   )
+
+  expect_false("use_transformer_blocks" %in% names(fit$model_config))
+  expect_false("n_heads" %in% names(fit$model_config))
+  expect_false("ffn_mult" %in% names(fit$model_config))
 
   pred <- predict(fit, return_se = FALSE)
   expected <- as.numeric(1 + 2 * covariates[, 1])
@@ -288,6 +293,7 @@ test_that("fit_pigauto and predict work with multi-obs data", {
 
 test_that("impute() works end-to-end with rownames (single-obs)", {
   td <- make_test_data(n = 20, seed = 60)
+  td$df[1L, 1L] <- NA
   result <- impute(td$df, td$tree, epochs = 20L, verbose = FALSE, seed = 60)
   expect_s3_class(result, "pigauto_result")
   expect_s3_class(result$prediction, "pigauto_pred")
@@ -302,6 +308,7 @@ test_that("impute() works with species_col (multi-obs)", {
     sp = rep(tree$tip.label, each = 2),
     x = abs(stats::rnorm(30)) + 0.5
   )
+  df$x[1L] <- NA_real_
   result <- impute(df, tree, species_col = "sp",
                    epochs = 20L, verbose = FALSE, seed = 61)
   expect_s3_class(result, "pigauto_result")
@@ -514,10 +521,11 @@ test_that("predict.pigauto_fit catches wrong-length calibrated_gates override", 
   traits <- avonet300[1:40, c("Species_Key", "Mass")]
   rownames(traits) <- traits$Species_Key
   traits$Species_Key <- NULL
+  traits$Mass[1L] <- NA_real_
   subtree <- ape::keep.tip(tree300, rownames(traits))
 
   res <- pigauto::impute(traits, subtree, epochs = 20L, verbose = FALSE,
-                         seed = 1L, missing_frac = 0.0)
+                         seed = 1L, missing_frac = 0.0, gnn = TRUE)
   fit <- res$fit
   p   <- as.integer(fit$model_config$input_dim)
 
@@ -577,6 +585,18 @@ test_that("conformal_split_val=TRUE changes conformal scores (no double-dipping)
   # n=200 + 50% missing + 40% val per masked-trait gives ~40 val cells
   # per column, just above the default `2 * min_val_cells = 40` split
   # threshold so the per-column split actually fires here.
+  #
+  # S5c (rose-review.md required change 1): under the default
+  # predict_method = "auto", fit_pigauto() first restricts calibration/
+  # conformal to the trait's SCORE half of validation cells (the half not
+  # used to choose the route) -- roughly halving the ~40 cells per column
+  # this test relies on, below the 2 * min_val_cells = 40 threshold, so
+  # conformal_split_val's OWN per-column split no longer fires and this
+  # test's two fits become identical for a reason unrelated to what it is
+  # testing. Pin predict_method = "per_column" (no routing decision is
+  # made, so the full validation set is used, matching this test's
+  # original cell-count assumption) -- this test is about the C.3
+  # calibration/conformal split, not about "auto".
   set.seed(90)
   tree <- ape::rtree(200)
   df   <- data.frame(
@@ -591,10 +611,12 @@ test_that("conformal_split_val=TRUE changes conformal scores (no double-dipping)
   fit_split <- fit_pigauto(pd, tree, splits = spl,
                             epochs = 30L, eval_every = 10L, patience = 5L,
                             verbose = FALSE, seed = 90,
+                            predict_method = "per_column",
                             conformal_split_val = TRUE)
   fit_full  <- fit_pigauto(pd, tree, splits = spl,
                             epochs = 30L, eval_every = 10L, patience = 5L,
                             verbose = FALSE, seed = 90,
+                            predict_method = "per_column",
                             conformal_split_val = FALSE)
 
   expect_true(!is.null(fit_split$conformal_scores))

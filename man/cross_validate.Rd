@@ -29,7 +29,11 @@ cross_validate(
 \item{verbose}{logical.  Print progress (default TRUE).}
 
 \item{...}{Additional arguments passed to \code{\link{fit_pigauto}}
-(e.g. \code{hidden_dim}, \code{k_eigen}, \code{use_attention}).}
+(e.g. \code{hidden_dim}, \code{k_eigen}, \code{use_attention}).
+\code{cross_validate()} precomputes one graph shared across folds and uses
+\code{k_eigen = 8L} for that graph when \code{k_eigen} is omitted. An
+explicit \code{k_eigen} is used for the shared graph and forwarded to
+\code{fit_pigauto()}.}
 }
 \value{
 A list of class \code{"pigauto_cv"} with:
@@ -51,12 +55,14 @@ serve as the test set.  Returns per-fold and aggregated metrics.
 \examples{
 \donttest{
 data(avonet300, tree300, package = "pigauto")
-tree <- ape::keep.tip(tree300, tree300$tip.label[seq_len(30L)])
+tree <- ape::keep.tip(tree300, tree300$tip.label[seq_len(12L)])
 traits <- avonet300[match(tree$tip.label, avonet300$Species_Key),
                      c("Mass", "Wing.Length"), drop = FALSE]
 rownames(traits) <- tree$tip.label
 cv <- cross_validate(preprocess_traits(traits, tree), tree, k = 3L,
-                     seeds = 1L, epochs = 5L, verbose = FALSE)
+                     seeds = 1L, epochs = 1L, verbose = FALSE,
+                     k_eigen = 4L, hidden_dim = 8L,
+                     use_transformer_blocks = FALSE)
 print(cv)
 summary(cv)
 }

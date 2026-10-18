@@ -1,20 +1,25 @@
-#' Generate an HTML benchmark report from a pigauto fit
+#' Generate an HTML imputation report from a pigauto fit
 #'
-#' Produces a self-contained HTML file with interactive charts comparing the
-#' GNN against the phylogenetic baseline.  The report includes per-trait
-#' metrics, gate values, conformal coverage, and training history.
+#' Produces an HTML file with interactive charts (loading Chart.js from its
+#' public CDN). For fits created with the default \code{gnn = FALSE}, the
+#' report describes baseline-only imputation. For fits created with
+#' \code{gnn = TRUE}, it also compares the GNN against the phylogenetic
+#' baseline and includes training history. Per-trait metrics, gate values,
+#' and held-out diagnostic conformal coverage are included when available.
 #'
 #' @param fit A \code{pigauto_fit} object (or a \code{pigauto_result} from
 #'   \code{\link{impute}}).
 #' @param data Optional \code{pigauto_data} object.  Extracted automatically
-#'   when \code{fit} is a \code{pigauto_result}.
-#' @param splits Optional splits object.  Extracted automatically when
-#'   \code{fit} is a \code{pigauto_result}.
-#' @param output_path Character.  File path for the HTML report (default
-#'   \code{"pigauto_report.html"} in the working directory).
-#' @param title Character.  Report title.
-#' @param open Logical.  Open the report in a browser when done (default
-#'   \code{TRUE}).
+#'   when \code{fit} is a \code{pigauto_result}.  When supplied it must match
+#'   the fit (species and traits).
+#' @param splits Optional splits object from \code{\link{make_missing_splits}}.
+#'   Extracted automatically when \code{fit} is a \code{pigauto_result}.
+#'   When supplied it must match the fit.
+#' @param output_path Character of length 1.  File path for the HTML report
+#'   (default \code{"pigauto_report.html"} in the working directory).
+#' @param title Character of length 1.  Report title (HTML-escaped on write).
+#' @param open Logical of length 1.  Open the report in a browser when done
+#'   (default \code{TRUE}).
 #' @return The output path (invisibly).
 #' @examples
 #' \donttest{
@@ -34,6 +39,12 @@ pigauto_report <- function(fit, data = NULL, splits = NULL,
                            title = "pigauto Imputation Report",
                            open = TRUE) {
 
+  .check_report_title(title)
+  .check_report_output_path(output_path)
+  .check_report_open(open)
+  .check_report_data(data)
+  .check_report_splits(splits)
+
   # Unwrap pigauto_result
 
   if (inherits(fit, "pigauto_result")) {
@@ -41,12 +52,19 @@ pigauto_report <- function(fit, data = NULL, splits = NULL,
     if (is.null(splits)) splits <- fit$splits
     pred   <- fit$prediction
     fit_obj <- fit$fit
+    saved_check <- fit$check
   } else if (inherits(fit, "pigauto_fit")) {
     fit_obj <- fit
     pred <- predict(fit_obj, return_se = TRUE)
+    saved_check <- NULL
   } else {
     stop("'fit' must be a pigauto_fit or pigauto_result object.")
   }
+
+  .check_report_data(data)
+  .check_report_splits(splits)
+  .check_report_data_matches_fit(data, fit_obj)
+  .check_report_splits_match_fit(splits, fit_obj, data)
 
   trait_map <- fit_obj$trait_map
   if (is.null(trait_map)) stop("Report requires a trait_map (mixed-type fit).")
@@ -66,16 +84,141 @@ pigauto_report <- function(fit, data = NULL, splits = NULL,
 
   # ---- Build HTML ------------------------------------------------------------
   html <- build_report_html(
-    title     = title,
+    title     = .escape_report_html(title),
     fit_obj   = fit_obj,
     pred      = pred,
     metrics   = metrics,
     trait_map = trait_map
   )
+  # Column label for the non-BM arm: "GNN", or the calibrated blend when gnn = FALSE.
+  html <- gsub("ARM_LABEL", if (isFALSE(fit_obj$model_config$gnn)) "Blend (GNN off)" else "GNN",
+               html, fixed = TRUE)
+  html <- sub("</body>", paste0(.report_contract_html(saved_check, fit), "</body>"),
+              html, fixed = TRUE)
 
   writeLines(html, output_path)
   if (open) utils::browseURL(output_path)
   invisible(output_path)
+}
+
+.escape_report_html <- function(x) {
+  x <- as.character(x)
+  x <- gsub("&", "&amp;", x, fixed = TRUE)
+  x <- gsub("<", "&lt;", x, fixed = TRUE)
+  x <- gsub(">", "&gt;", x, fixed = TRUE)
+  x <- gsub("\"", "&quot;", x, fixed = TRUE)
+  gsub("'", "&#39;", x, fixed = TRUE)
+}
+
+.check_report_title <- function(title) {
+  if (!is.character(title) || length(title) != 1L || is.na(title)) {
+    stop("'title' must be a single character string.")
+  }
+  invisible(title)
+}
+
+.check_report_output_path <- function(output_path) {
+  if (!is.character(output_path) || length(output_path) != 1L ||
+      is.na(output_path) || !nzchar(output_path)) {
+    stop("'output_path' must be a single non-empty character string.")
+  }
+  invisible(output_path)
+}
+
+.check_report_open <- function(open) {
+  if (!is.logical(open) || length(open) != 1L || is.na(open)) {
+    stop("'open' must be TRUE or FALSE.")
+  }
+  invisible(open)
+}
+
+.check_report_data <- function(data) {
+  if (is.null(data)) return(invisible(NULL))
+  if (!inherits(data, "pigauto_data")) {
+    stop("'data' must be a pigauto_data object.")
+  }
+  invisible(data)
+}
+
+.check_report_splits <- function(splits) {
+  if (is.null(splits)) return(invisible(NULL))
+  ok <- is.list(splits) && !is.data.frame(splits) &&
+    !is.null(splits$val_idx) && !is.null(splits$test_idx)
+  if (!ok) {
+    stop("'splits' must be a list from make_missing_splits().")
+  }
+  invisible(splits)
+}
+
+.report_latent_dims <- function(fit_obj) {
+  n <- if (isTRUE(fit_obj$multi_obs)) {
+    length(fit_obj$obs_to_species)
+  } else {
+    length(fit_obj$species_names)
+  }
+  p <- if (!is.null(fit_obj$baseline$mu)) {
+    ncol(as.matrix(fit_obj$baseline$mu))
+  } else {
+    sum(vapply(fit_obj$trait_map, function(tm) length(tm$latent_cols), integer(1)))
+  }
+  c(n = as.integer(n), p = as.integer(p))
+}
+
+.check_report_data_matches_fit <- function(data, fit_obj) {
+  if (is.null(data)) return(invisible(NULL))
+  same_sp <- identical(as.character(data$species_names),
+                       as.character(fit_obj$species_names))
+  same_tr <- identical(as.character(data$trait_names),
+                       as.character(fit_obj$trait_names))
+  dims <- .report_latent_dims(fit_obj)
+  same_dim <- is.matrix(data$X_scaled) &&
+    nrow(data$X_scaled) == dims[["n"]] &&
+    ncol(data$X_scaled) == dims[["p"]]
+  if (!isTRUE(same_sp) || !isTRUE(same_tr) || !isTRUE(same_dim)) {
+    stop("'data' does not match fit (species/traits).")
+  }
+  invisible(data)
+}
+
+.check_report_splits_match_fit <- function(splits, fit_obj, data = NULL) {
+  if (is.null(splits)) return(invisible(NULL))
+  dims <- .report_latent_dims(fit_obj)
+  if (!is.null(data) && is.matrix(data$X_scaled)) {
+    dims <- c(n = as.integer(nrow(data$X_scaled)),
+              p = as.integer(ncol(data$X_scaled)))
+  }
+  n_cells <- dims[["n"]] * dims[["p"]]
+  idx <- c(splits$val_idx, splits$test_idx)
+  if (!is.numeric(idx) || anyNA(idx) ||
+      length(idx) && (any(idx != as.integer(idx)) ||
+                      min(idx) < 1L || max(idx) > n_cells)) {
+    stop("'splits' do not match fit.")
+  }
+  if (!is.null(splits$n) && as.integer(splits$n) != dims[["n"]]) {
+    stop("'splits' do not match fit.")
+  }
+  if (!is.null(splits$p) && as.integer(splits$p) != dims[["p"]]) {
+    stop("'splits' do not match fit.")
+  }
+  invisible(splits)
+}
+
+.report_contract_html <- function(check, result = NULL) {
+  input <- if (is.null(check)) {
+    "<p>Preflight check unavailable.</p>"
+  } else {
+    msgs <- check$messages
+    rows <- if (is.null(msgs) || !nrow(msgs)) "<tr><td colspan=\"3\">No messages</td></tr>" else paste(vapply(seq_len(nrow(msgs)), function(i) {
+      sprintf("<tr><td>%s</td><td>%s</td><td>%s</td></tr>",
+              .escape_report_html(msgs$code[[i]]), .escape_report_html(msgs$text[[i]]),
+              .escape_report_html(msgs$action[[i]]))
+    }, character(1)), collapse = "")
+    paste0("<p>Status: <strong>", .escape_report_html(check$status),
+           "</strong></p><table><thead><tr><th>Code</th><th>Message</th><th>Action</th></tr></thead><tbody>", rows, "</tbody></table>")
+  }
+  roles <- if (inherits(result, "pigauto_result")) .describe_pigauto_result(result) else data.frame(role = "legacy", text = "Preflight check unavailable for a bare fit.")
+  role_rows <- paste(vapply(seq_len(nrow(roles)), function(i) sprintf("<li><strong>%s:</strong> %s</li>", .escape_report_html(roles$role[[i]]), .escape_report_html(roles$text[[i]])), character(1)), collapse = "")
+  paste0("<h2>Input checks</h2>", input, "<h2>How to use outputs</h2><ul>", role_rows, "</ul>")
 }
 
 
@@ -215,6 +358,10 @@ build_report_html <- function(title, fit_obj, pred, metrics, trait_map) {
   has_conformal   <- !is.null(fit_obj$conformal_scores)
   k_eigen <- fit_obj$model_config$k_eigen
 
+  # Under gnn = FALSE there is no GNN: the second column is the calibrated baseline
+  # blend (BM, optionally re-weighted against the grand-mean floor), so the header
+  # and the verdict must not read as a BM-vs-GNN comparison.
+  gnn_off <- isFALSE(fit_obj$model_config$gnn)
   # Build metrics table rows
   trait_rows <- ""
   for (m in metrics) {
@@ -244,13 +391,13 @@ build_report_html <- function(title, fit_obj, pred, metrics, trait_map) {
           pct <- sprintf('<span class="zero">%.1f%%</span>', pct_val)
           verdict <- '<span class="pill pill-neutral">tied</span>'
         }
+        if (gnn_off) verdict <- '<span class="pill pill-neutral">GNN off</span>'
       }
 
       cov <- "&mdash;"
       if (!is.null(m$conformal_coverage)) {
         cov_val <- m$conformal_coverage * 100
-        cov_class <- if (cov_val >= 93) "pos" else if (cov_val >= 85) "zero" else "neg"
-        cov <- sprintf('<span class="%s">%.1f%%</span>', cov_class, cov_val)
+        cov <- sprintf('%.1f%% (held-out diagnostic)', cov_val)
       }
 
       trait_rows <- paste0(trait_rows, sprintf(
@@ -277,6 +424,7 @@ build_report_html <- function(title, fit_obj, pred, metrics, trait_map) {
           pct <- '<span class="zero">0.0 pp</span>'
           verdict <- '<span class="pill pill-neutral">tied</span>'
         }
+        if (gnn_off) verdict <- '<span class="pill pill-neutral">GNN off</span>'
       }
 
       trait_rows <- paste0(trait_rows, sprintf(
@@ -319,7 +467,8 @@ build_report_html <- function(title, fit_obj, pred, metrics, trait_map) {
 
   # Features list
   features <- c(
-    if (has_attention)   "Attention message passing" else "Standard message passing",
+    if (gnn_off) "GNN off: phylogenetic baseline only (no torch)" else
+      if (has_attention) "Attention message passing" else "Standard message passing",
     if (has_calibration) "Validation-calibrated gates",
     if (has_conformal)   "Conformal prediction intervals",
     sprintf("Adaptive spectral encoding (k=%d)", k_eigen),
@@ -395,7 +544,7 @@ tr:hover{background:#f8f9fa;}
 
 <h2>Per-Trait Performance</h2>
 <table>
-<thead><tr><th>Trait</th><th>Type</th><th class="num">n test</th><th class="num">BM</th><th class="num">GNN</th><th class="num">%%&Delta;</th><th class="num">r (BM)</th><th class="num">r (GNN)</th><th class="num">Coverage</th><th>Verdict</th></tr></thead>
+<thead><tr><th>Trait</th><th>Type</th><th class="num">n test</th><th class="num">BM</th><th class="num">ARM_LABEL</th><th class="num">%%&Delta;</th><th class="num">r (BM)</th><th class="num">r (ARM_LABEL)</th><th class="num">Held-out coverage (diagnostic)</th><th>Verdict</th></tr></thead>
 <tbody>%s</tbody>
 </table>
 

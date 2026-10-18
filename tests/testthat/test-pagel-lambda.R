@@ -179,6 +179,12 @@ test_that('[pagel] bm_impute_col(lambda = "estimate") recovers low lambda on iid
 # ---- fit_baseline + dispatcher threading ----------------------------------
 
 test_that("[pagel] fit_baseline(lambda_mode='fixed_1') is back-compatible (no behaviour change)", {
+  # S4 (feat/joint-lambda-default) changed fit_baseline()'s DEFAULT
+  # lambda_mode from "fixed_1" to "estimate", so "no lambda_mode arg" is no
+  # longer equivalent to "fixed_1" -- that equivalence was this test's
+  # entire premise. Pinned: both calls now explicit "fixed_1", checking
+  # that two calls with the SAME requested mode agree (idempotence), which
+  # is what remains true and worth protecting here.
   set.seed(30L)
   tree <- ape::rcoal(30L)
   df <- data.frame(
@@ -189,7 +195,7 @@ test_that("[pagel] fit_baseline(lambda_mode='fixed_1') is back-compatible (no be
   df$x1[c(2L, 5L, 17L)] <- NA
   df$x2[c(3L, 11L)] <- NA
   pd <- preprocess_traits(df, tree)
-  bl_default <- fit_baseline(pd, tree)
+  bl_default <- fit_baseline(pd, tree, lambda_mode = "fixed_1")
   bl_fixed   <- fit_baseline(pd, tree, lambda_mode = "fixed_1")
   expect_equal(bl_fixed$mu, bl_default$mu, tolerance = 1e-12)
   expect_equal(bl_fixed$se, bl_default$se, tolerance = 1e-12)
@@ -254,4 +260,73 @@ test_that("[pagel] impute(lambda_mode=...) threads to baseline and model config"
 
   expect_equal(res$fit$model_config$lambda_mode, "estimate")
   expect_true(all(is.finite(unlist(res$prediction$imputed, use.names = FALSE))))
+})
+
+# ---- lambda silently dropped under covariates (P1-8 fix 1) ---------------
+
+test_that("[pagel] fit_baseline warns when covariates + lambda_mode is 'cv' or 'bayes'", {
+  # S4 (feat/joint-lambda-default): bm_impute_col_with_cov() gained a
+  # `lambda` argument (S3) that accepts a numeric scalar or "estimate", so
+  # lambda_mode = "estimate" no longer triggers this warning -- only "cv"
+  # and "bayes" have no covariate-aware analogue (see the complementary
+  # "does NOT warn" test below, which now covers "estimate" via the new
+  # default). A single continuous trait keeps the per-column path selected
+  # (no joint dispatch competing for the warning).
+  set.seed(40L)
+  tree <- ape::rcoal(20L)
+  df <- data.frame(x1 = stats::rnorm(20L), row.names = tree$tip.label)
+  df$x1[c(2L, 9L)] <- NA
+  covs <- data.frame(env = stats::rnorm(20L), row.names = tree$tip.label)
+  pd <- preprocess_traits(df, tree, covariates = covs)
+
+  expect_warning(
+    fit_baseline(pd, tree, lambda_mode = "cv"),
+    regexp = "lambda_mode.*not supported.*covariate-aware BM baseline"
+  )
+  expect_no_warning(fit_baseline(pd, tree, lambda_mode = "estimate"))
+})
+
+test_that("[pagel] fit_baseline does NOT warn for covariates + default lambda_mode", {
+  set.seed(41L)
+  tree <- ape::rcoal(20L)
+  df <- data.frame(x1 = stats::rnorm(20L), row.names = tree$tip.label)
+  df$x1[c(2L, 9L)] <- NA
+  covs <- data.frame(env = stats::rnorm(20L), row.names = tree$tip.label)
+  pd <- preprocess_traits(df, tree, covariates = covs)
+
+  expect_no_warning(fit_baseline(pd, tree))
+})
+
+# ---- full-REML fix (2026-09-24) --------------------------------------------
+
+test_that("[pagel] full REML term reduces the low bias at weak signal", {
+  # build_pagel_nll_cache() (R/pagel_lambda.R) now includes the REML
+  # determinant correction 0.5 * log(1' R_oo(lambda)^-1 1) for profiling
+  # out the scalar GLS mean. Regime: n = 300, 30% MCAR, BM DGP at
+  # lambda = 0.3, observed mean shifted +1.5 (matches the diagnostic that
+  # motivated this fix). Verified (temporarily reverting the REML term)
+  # that this exact test fails on the pre-fix estimator: old bias
+  # |mean(lambda_hat) - 0.3| ~= 0.061, well above the 0.04 gate.
+  skip_on_cran()
+  n <- 300L
+  n_miss <- 90L
+  lambda_true <- 0.3
+  n_seeds <- 100L
+  lambda_hats <- numeric(n_seeds)
+  for (s in seq_len(n_seeds)) {
+    set.seed(s)
+    tree <- ape::rcoal(n)
+    R <- stats::cov2cor(ape::vcv.phylo(tree))
+    R <- R[tree$tip.label, tree$tip.label]
+    Lc <- chol(R)
+    y <- sqrt(lambda_true) * drop(crossprod(Lc, rnorm(n))) +
+      sqrt(1 - lambda_true) * rnorm(n) + 1.5
+    y[sample(n, n_miss)] <- NA
+    lambda_hats[s] <- pigauto:::ml_lambda_for_col(y, R)
+  }
+  bias <- mean(lambda_hats) - lambda_true
+  message(sprintf(
+    "[pagel] full-REML weak-signal recovery (n = %d seeds): mean(lambda_hat) = %.4f, bias = %.4f",
+    n_seeds, mean(lambda_hats), bias))
+  expect_lt(abs(bias), 0.04)
 })

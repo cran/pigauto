@@ -26,6 +26,22 @@
 #' the narrow analysis-aware backend after consulting its supported-model and
 #' lifecycle documentation.
 #'
+#' **\code{gnn = FALSE} fits (traditional-stats mode):** when the fit was
+#' produced with \code{gnn = FALSE}, no GNN was ever trained, so this
+#' function makes no \code{torch::} calls at all -- prediction is the
+#' calibrated baseline blend \code{r_cal_bm * baseline + r_cal_mean *
+#' mean_baseline_per_col} (\code{r_cal_gnn} is always zero) computed on
+#' plain R matrices. Two baselines are available: in production mode (the
+#' default, no \code{.mask_observed_idx}) predictions use \code{baseline_full}
+#' -- fit with \code{splits = NULL}, so every observed cell can inform every
+#' other cell; in evaluation mode (\code{.mask_observed_idx} supplied, as
+#' used internally for val/test scoring) predictions use the held-out
+#' \code{baseline} instead, so scored cells never see their own value.
+#' \code{n_imputations > 1} draws are BM posterior samples
+#' \code{MU_m ~ N(baseline_mu, baseline_se)} at originally-missing cells
+#' (observed cells are always restored to their true value), with no GNN
+#' dropout contribution.
+#'
 #' **Decoding per type:**
 #' \describe{
 #'   \item{continuous}{reverse z-score, then \code{exp()} if log-transformed}
@@ -34,6 +50,30 @@
 #'   \item{ordinal}{reverse z-score, round to nearest valid integer level}
 #'   \item{categorical}{\code{softmax()} over K latent columns, argmax}
 #' }
+#'
+#' **Conformal intervals:** \code{conformal_lower} / \code{conformal_upper}
+#' use whatever \code{conformal_method} the fit was trained with
+#' (\code{\link{fit_pigauto}}). For \code{"mondrian"}, the half-width is not
+#' constant across rows: each target cell's phylogenetic locality (mean
+#' cophenetic distance to its 5 nearest training-observed species for that
+#' trait) picks the near- or far-stratum score stored on the fit, so
+#' predictions in undersampled clades get wider intervals. See
+#' \code{\link{fit_pigauto}}'s \code{conformal_method} argument for details.
+#'
+#' **\code{zi_count} conformal intervals are conditional on non-zero.**
+#' \code{conformal_lower[, nm]} / \code{conformal_upper[, nm]} for a
+#' \code{zi_count} trait back-transform the magnitude latent (log1p-z of the
+#' count \emph{given it is non-zero}) plus/minus the conformal half-width
+#' that was calibrated on that same magnitude column
+#' (\code{\link{fit_pigauto}}'s \code{compute_conformal_scores()} scores
+#' zi_count on \code{latent_cols[2]}, never on the decoded \code{E[X]}).
+#' They are \strong{not} an interval for the expected value
+#' \code{E[X] = P(nonzero) * E[count | nonzero]} -- constructing a naive
+#' \eqn{\pm}quantile interval directly on \code{E[X]} would conflate gate
+#' and magnitude uncertainty into one number with no valid coverage
+#' interpretation. The gate probability \code{P(nonzero)} is available
+#' separately in \code{pred$probabilities[[nm]]}; combine it with the
+#' conditional interval yourself if you need an \code{E[X]}-scale bound.
 #'
 #' @param object object of class \code{"pigauto_fit"}.
 #' @param newdata \code{NULL} (use the training data) or a
@@ -110,12 +150,9 @@
 #'     \item{imputed_latent}{Numeric matrix (n x p_latent) of predictions in
 #'       latent scale.}
 #'     \item{se}{Numeric matrix (n x n_original_traits) of per-cell
-#'       uncertainty.  Continuous/count/ordinal/proportion: SE in original
-#'       scale (BM conditional SD, delta-method back-transformed).
-#'       Binary: \code{min(p, 1-p)} — probability of being wrong (0 = certain,
-#'       0.5 = maximally uncertain); \strong{not} a Gaussian SE.
-#'       Categorical: \code{1 - max(p_k)} — margin from certainty; \strong{not}
-#'       a Gaussian SE.  \code{NULL} if \code{return_se = FALSE}.}
+#'       uncertainty. See the "What \code{$se} means per trait type" section
+#'       below for what each trait type's column actually contains.
+#'       \code{NULL} if \code{return_se = FALSE}.}
 #'     \item{probabilities}{Named list.  Binary traits: numeric probability
 #'       vector.  Categorical traits: n x K probability matrix.  Other
 #'       types: not present.}
@@ -127,6 +164,30 @@
 #'     \item{trait_names}{Character vector.}
 #'     \item{n_imputations}{Integer, number of imputations performed.}
 #'   }
+#' @section What \code{$se} means per trait type:
+#' \code{pred$se} is a single \code{n x n_original_traits} matrix, but its
+#' per-column meaning differs by trait type — do not treat every column as
+#' a Gaussian standard error. This table is the definitive reference; other
+#' pigauto documentation (e.g. \code{\link{impute}}'s return value) points
+#' here instead of repeating it.
+#'
+#' \tabular{lll}{
+#'   \strong{Type} \tab \strong{Value} \tab \strong{Is it a Gaussian SE?} \cr
+#'   continuous / count / ordinal / proportion \tab model-dependent BM/joint conditional SD, delta-method back-transformed to original scale \tab It is not total final blended-prediction uncertainty and not a package-certified interval input. \cr
+#'   binary \tab \code{min(p, 1-p)} \tab No. Probability of being wrong (0 = certain, 0.5 = maximally uncertain). \cr
+#'   categorical \tab \code{1 - max(p_k)} \tab No. Margin from certainty (0 = certain, (K-1)/K = maximally uncertain). \cr
+#'   zi_count \tab delta-method SE of \code{E[X] = P(nonzero) * E[count | nonzero]} \tab No. Mixes gate and magnitude uncertainty into one number; not a magnitude-scale SE. Use \code{conformal_lower} / \code{conformal_upper} (conditional-on-nonzero; see above) plus \code{probabilities} (the gate) for interval-scale zi_count uncertainty instead. \cr
+#'   multi_proportion \tab \code{NA} \tab Not computed; use the CLR latent SE (\code{se_latent}) instead. \cr
+#' }
+#'
+#' These families are \strong{incompatible objects sharing one column name}:
+#' only the continuous-family entries are standard errors in the Gaussian
+#' sense, and \strong{none} of the binary / categorical / zi_count entries
+#' may be used in Rubin's-rules arithmetic. The supported downstream
+#' multiple-imputation routes start with
+#' \code{\link{multi_impute_analysis}} or, for continuous traits,
+#' \code{\link{multi_impute}} with \code{draws_method = "posterior"}, then
+#' use \code{\link{with_imputations}} and \code{\link{pool_mi}}.
 #' @examples
 #' \donttest{
 #' data(avonet300, tree300)
@@ -158,6 +219,7 @@ predict.pigauto_fit <- function(object, newdata = NULL, return_se = TRUE,
                                 ...) {
   pool_method <- match.arg(pool_method)
   match_observed <- match.arg(match_observed)
+  .pigauto_assert_predictable_state(object)
   clamp_outliers <- isTRUE(clamp_outliers)
   if (!is.numeric(clamp_factor) || length(clamp_factor) != 1L ||
       !is.finite(clamp_factor) || clamp_factor < 1) {
@@ -171,62 +233,78 @@ predict.pigauto_fit <- function(object, newdata = NULL, return_se = TRUE,
   dots <- list(...)
   mask_observed_idx <- dots[[".mask_observed_idx"]]
   cfg       <- object$model_config
-  device    <- get_device()
+  # gnn = FALSE fits (gnn-off contract, S2): the GNN was never constructed or
+  # trained, so this function must make ZERO torch:: calls in that path --
+  # no get_device(), no ResidualPhyloDAE(), no load_state_dict(), no
+  # torch_tensor().  Everything below runs on plain R matrices instead.
+  # `isFALSE()` (not `!isTRUE()`) so old saves without a `gnn` field
+  # (implicitly GNN-on) fall through to the unchanged torch path.
+  gnn_off   <- isFALSE(cfg$gnn)
+  device    <- if (!gnn_off) get_device() else NULL
   trait_map <- object$trait_map
   has_trait_map <- !is.null(trait_map)
 
-  # Reconstruct model (backward compat with old saves that lack new params)
-  per_col                <- isTRUE(cfg$per_column_rs)
-  n_gnn_layers           <- cfg$n_gnn_layers %||% 1L
-  gate_cap               <- cfg$gate_cap %||% 0.5
-  use_attention          <- cfg$use_attention %||% FALSE
-  n_user_cov             <- cfg$n_user_cov %||% 0L
-  use_transformer_blocks <- cfg$use_transformer_blocks %||% FALSE  # old saves: legacy
-  n_heads                <- cfg$n_heads %||% 4L
-  ffn_mult               <- cfg$ffn_mult %||% 4L
-  use_trait_attention    <- isTRUE(cfg$use_trait_attention)        # old saves: FALSE
-  n_trait_heads          <- cfg$n_trait_heads   %||% 2L
-  trait_embed_dim        <- cfg$trait_embed_dim %||% 32L
-  dropout_cfg            <- cfg$dropout %||% 0.10
-  model <- ResidualPhyloDAE(
-    input_dim              = as.integer(cfg$input_dim),
-    hidden_dim             = as.integer(cfg$hidden_dim),
-    coord_dim              = as.integer(cfg$k_eigen),
-    cov_dim                = as.integer(cfg$cov_dim),
-    per_column_rs          = per_col,
-    n_gnn_layers           = as.integer(n_gnn_layers),
-    gate_cap               = gate_cap,
-    use_attention          = use_attention,
-    n_user_cov             = as.integer(n_user_cov),
-    dropout                = dropout_cfg,
-    use_transformer_blocks = use_transformer_blocks,
-    n_heads                = as.integer(n_heads),
-    ffn_mult               = as.integer(ffn_mult),
-    use_trait_attention    = use_trait_attention,
-    n_trait_heads          = as.integer(n_trait_heads),
-    trait_embed_dim        = as.integer(trait_embed_dim)
-  )
-  # Restore the CPU state before moving the rebuilt module to an accelerator.
-  # Loading CPU tensors directly into an MPS module can silently miss scalar
-  # bias values on some libtorch/macOS combinations (the weight still loads),
-  # which drops fixed-effect intercepts from prediction.
-  model$load_state_dict(object$model_state)
-  model$to(device = device)
-  # Some ARM/MPS libtorch builds expose the correct length-one bias after state
-  # loading but omit it from nn_linear()'s forward result.  Preserve the saved
-  # direct-covariate parameters so prediction can reconstruct this small fixed-
-  # effect term on CPU and bypass the affected MPS kernel entirely.
   mps_cov_linear <- NULL
-  cov_weight <- object$model_state[["cov_linear.weight"]]
-  cov_bias <- object$model_state[["cov_linear.bias"]]
-  if (identical(device$type, "mps") && !is.null(cov_weight) &&
-      !is.null(cov_bias) && !is.null(model$cov_linear)) {
-    mps_cov_linear <- list(
-      weight = as.matrix(as.array(cov_weight$detach()$cpu())),
-      bias = as.numeric(as.array(cov_bias$detach()$cpu()))
+  if (!gnn_off) {
+    # Reconstruct model (backward compat with old saves that lack new params)
+    per_col                <- isTRUE(cfg$per_column_rs)
+    n_gnn_layers           <- cfg$n_gnn_layers %||% 1L
+    gate_cap               <- cfg$gate_cap %||% 0.5
+    use_attention          <- cfg$use_attention %||% FALSE
+    n_user_cov             <- cfg$n_user_cov %||% 0L
+    use_transformer_blocks <- cfg$use_transformer_blocks %||% FALSE  # old saves: legacy
+    n_heads                <- cfg$n_heads %||% 4L
+    ffn_mult               <- cfg$ffn_mult %||% 4L
+    use_trait_attention    <- isTRUE(cfg$use_trait_attention)        # old saves: FALSE
+    n_trait_heads          <- cfg$n_trait_heads   %||% 2L
+    trait_embed_dim        <- cfg$trait_embed_dim %||% 32L
+    dropout_cfg            <- cfg$dropout %||% 0.10
+    model <- ResidualPhyloDAE(
+      input_dim              = as.integer(cfg$input_dim),
+      hidden_dim             = as.integer(cfg$hidden_dim),
+      coord_dim              = as.integer(cfg$k_eigen),
+      cov_dim                = as.integer(cfg$cov_dim),
+      per_column_rs          = per_col,
+      n_gnn_layers           = as.integer(n_gnn_layers),
+      gate_cap               = gate_cap,
+      use_attention          = use_attention,
+      n_user_cov             = as.integer(n_user_cov),
+      dropout                = dropout_cfg,
+      use_transformer_blocks = use_transformer_blocks,
+      n_heads                = as.integer(n_heads),
+      ffn_mult               = as.integer(ffn_mult),
+      use_trait_attention    = use_trait_attention,
+      n_trait_heads          = as.integer(n_trait_heads),
+      trait_embed_dim        = as.integer(trait_embed_dim)
     )
+    # Restore the CPU state before moving the rebuilt module to an accelerator.
+    # Loading CPU tensors directly into an MPS module can silently miss scalar
+    # bias values on some libtorch/macOS combinations (the weight still loads),
+    # which drops fixed-effect intercepts from prediction.
+    tryCatch(
+      model$load_state_dict(object$model_state),
+      error = function(e) {
+        stop("This pigauto_fit cannot be used after saveRDS()/readRDS(). ",
+             "Use save_pigauto() and load_pigauto() instead.",
+             call. = FALSE)
+      }
+    )
+    model$to(device = device)
+    # Some ARM/MPS libtorch builds expose the correct length-one bias after state
+    # loading but omit it from nn_linear()'s forward result.  Preserve the saved
+    # direct-covariate parameters so prediction can reconstruct this small fixed-
+    # effect term on CPU and bypass the affected MPS kernel entirely.
+    cov_weight <- object$model_state[["cov_linear.weight"]]
+    cov_bias <- object$model_state[["cov_linear.bias"]]
+    if (identical(device$type, "mps") && !is.null(cov_weight) &&
+        !is.null(cov_bias) && !is.null(model$cov_linear)) {
+      mps_cov_linear <- list(
+        weight = as.matrix(as.array(cov_weight$detach()$cpu())),
+        bias = as.numeric(as.array(cov_bias$detach()$cpu()))
+      )
+    }
+    gpu_mem_checkpoint("predict: after model rebuild + load_state_dict")
   }
-  gpu_mem_checkpoint("predict: after model rebuild + load_state_dict")
 
   # Calibrated gates override learned gates.
   # Defensive length check (Fix C.4 / Opus 2026-04-28): when a downstream
@@ -274,10 +352,27 @@ predict.pigauto_fit <- function(object, newdata = NULL, return_se = TRUE,
 
   # Optional baseline override — used by multi_impute_trees(share_gnn = TRUE)
   # to reuse a trained GNN across posterior trees, with only the BM baseline
-  # recomputed per tree.
-  effective_baseline <- if (!is.null(baseline_override)) baseline_override
-                        else object$baseline
-  baseline_label <- if (!is.null(baseline_override)) "baseline_override" else "object$baseline"
+  # recomputed per tree. Under gnn = FALSE (and no baseline_override),
+  # production mode (no `.mask_observed_idx`, i.e. predicting on the fit's
+  # own training data) uses `baseline_full` -- fit with splits = NULL, so
+  # every observed cell can inform every other cell's baseline. Evaluation
+  # mode (`.mask_observed_idx` supplied, e.g. by internal val/test scoring)
+  # uses the held-out `baseline` so held-out cells are scored honestly.
+  # GNN-on fits are unaffected: they always use `object$baseline`, as before.
+  effective_baseline <- if (!is.null(baseline_override)) {
+    baseline_override
+  } else if (gnn_off) {
+    if (is.null(mask_observed_idx)) object$baseline_full else object$baseline
+  } else {
+    object$baseline
+  }
+  baseline_label <- if (!is.null(baseline_override)) {
+    "baseline_override"
+  } else if (gnn_off) {
+    if (is.null(mask_observed_idx)) "object$baseline_full" else "object$baseline"
+  } else {
+    "object$baseline"
+  }
   if (!is.matrix(effective_baseline$mu) || !is.matrix(effective_baseline$se)) {
     stop("`", baseline_label, "` must contain `mu` and `se` matrices.",
          call. = FALSE)
@@ -349,97 +444,104 @@ predict.pigauto_fit <- function(object, newdata = NULL, return_se = TRUE,
     X_seed[observed_mask] <- observed_values[observed_mask]
   }
 
-  t_X_fill <- torch::torch_tensor(X_seed, dtype = torch::torch_float(),
-                                  device = device)
-  t_MU     <- torch::torch_tensor(MU, dtype = torch::torch_float(),
-                                  device = device)
-  t_coords <- torch::torch_tensor(coords, dtype = torch::torch_float(),
-                                  device = device)
-  t_adj    <- torch::torch_tensor(adj,    dtype = torch::torch_float(),
-                                  device = device)
-  # Squared cophenetic distances for B2 rate-aware attention.
-  # NULL for old pigauto_fit objects saved before B2.1 — backward compat.
-  t_D_sq <- if (!is.null(D_sq)) {
-    torch::torch_tensor(D_sq, dtype = torch::torch_float(), device = device)
-  } else {
-    NULL
-  }
-
-  # Observation-to-species mapping tensor
-  if (multi_obs) {
-    t_obs_to_sp <- torch::torch_tensor(
-      as.integer(obs_to_sp), dtype = torch::torch_long(), device = device
-    )
-  } else {
-    t_obs_to_sp <- NULL
-  }
-  t_observed_mask <- NULL
-  t_observed_values <- NULL
-  if (!is.null(observed_mask)) {
-    t_observed_mask <- torch::torch_tensor(observed_mask,
-                                           dtype = torch::torch_bool(),
-                                           device = device)
-    t_observed_values <- torch::torch_tensor(observed_values,
-                                             dtype = torch::torch_float(),
-                                             device = device)
-  }
-
-  # ---- Covariates (environmental conditioners) ------------------------------
   has_covariates <- !is.null(object$covariates)
   t_covariates   <- NULL
-  n_cov_cols      <- 0L
-  if (has_covariates) {
-    covariates <- as.matrix(object$covariates)
-    if (nrow(covariates) != n) {
-      stop("Stored covariates have ", nrow(covariates),
-           " row(s), but prediction needs ", n, " row(s).",
+  t_mps_cov_fixed_effects <- NULL
+  if (!gnn_off) {
+    t_X_fill <- torch::torch_tensor(X_seed, dtype = torch::torch_float(),
+                                    device = device)
+    t_MU     <- torch::torch_tensor(MU, dtype = torch::torch_float(),
+                                    device = device)
+    t_coords <- torch::torch_tensor(coords, dtype = torch::torch_float(),
+                                    device = device)
+    t_adj    <- torch::torch_tensor(adj,    dtype = torch::torch_float(),
+                                    device = device)
+    # Squared cophenetic distances for B2 rate-aware attention.
+    # NULL for old pigauto_fit objects saved before B2.1 — backward compat.
+    t_D_sq <- if (!is.null(D_sq)) {
+      torch::torch_tensor(D_sq, dtype = torch::torch_float(), device = device)
+    } else {
+      NULL
+    }
+
+    # Observation-to-species mapping tensor
+    if (multi_obs) {
+      t_obs_to_sp <- torch::torch_tensor(
+        as.integer(obs_to_sp), dtype = torch::torch_long(), device = device
+      )
+    } else {
+      t_obs_to_sp <- NULL
+    }
+    t_observed_mask <- NULL
+    t_observed_values <- NULL
+    if (!is.null(observed_mask)) {
+      t_observed_mask <- torch::torch_tensor(observed_mask,
+                                             dtype = torch::torch_bool(),
+                                             device = device)
+      t_observed_values <- torch::torch_tensor(observed_values,
+                                               dtype = torch::torch_float(),
+                                               device = device)
+    }
+
+    # ---- Covariates (environmental conditioners) ----------------------------
+    # Skipped entirely under gnn = FALSE: covariates only enter prediction via
+    # the GNN's obs_refine MLP / cov_linear fixed-effect term, neither of
+    # which exists when the GNN was never trained.
+    n_cov_cols <- 0L
+    if (has_covariates) {
+      covariates <- as.matrix(object$covariates)
+      if (nrow(covariates) != n) {
+        stop("Stored covariates have ", nrow(covariates),
+             " row(s), but prediction needs ", n, " row(s).",
+             call. = FALSE)
+      }
+      n_cov_cols <- ncol(covariates)
+      t_covariates <- torch::torch_tensor(
+        covariates, dtype = torch::torch_float(), device = device
+      )
+    }
+    if (!is.null(mps_cov_linear) && has_covariates) {
+      mps_fixed_effects <- covariates %*% t(mps_cov_linear$weight)
+      mps_fixed_effects <- sweep(
+        mps_fixed_effects, 2L, mps_cov_linear$bias, FUN = "+"
+      )
+      t_mps_cov_fixed_effects <- torch::torch_tensor(
+        mps_fixed_effects, dtype = torch::torch_float(), device = device
+      )
+    }
+    actual_cov_dim <- p + 1L + n_cov_cols
+    expected_cov_dim <- as.integer(cfg$cov_dim)
+    if (length(expected_cov_dim) == 1L && !is.na(expected_cov_dim) &&
+        actual_cov_dim != expected_cov_dim) {
+      stop("Prediction covariate tensor would have ", actual_cov_dim,
+           " column(s), but the model was fitted with cov_dim = ",
+           expected_cov_dim, ". Check the fit object's stored covariates.",
            call. = FALSE)
     }
-    n_cov_cols <- ncol(covariates)
-    t_covariates <- torch::torch_tensor(
-      covariates, dtype = torch::torch_float(), device = device
-    )
-  }
-  t_mps_cov_fixed_effects <- NULL
-  if (!is.null(mps_cov_linear) && has_covariates) {
-    mps_fixed_effects <- covariates %*% t(mps_cov_linear$weight)
-    mps_fixed_effects <- sweep(
-      mps_fixed_effects, 2L, mps_cov_linear$bias, FUN = "+"
-    )
-    t_mps_cov_fixed_effects <- torch::torch_tensor(
-      mps_fixed_effects, dtype = torch::torch_float(), device = device
-    )
-  }
-  actual_cov_dim <- p + 1L + n_cov_cols
-  expected_cov_dim <- as.integer(cfg$cov_dim)
-  if (length(expected_cov_dim) == 1L && !is.na(expected_cov_dim) &&
-      actual_cov_dim != expected_cov_dim) {
-    stop("Prediction covariate tensor would have ", actual_cov_dim,
-         " column(s), but the model was fitted with cov_dim = ",
-         expected_cov_dim, ". Check the fit object's stored covariates.",
-         call. = FALSE)
-  }
 
-  gpu_mem_checkpoint("predict: after input tensor creation (adj, D_sq, coords, MU)")
+    gpu_mem_checkpoint("predict: after input tensor creation (adj, D_sq, coords, MU)")
+  }
 
   # ---- Inference (single or MC dropout) ------------------------------------
   latent_runs <- vector("list", n_imp)
 
-  # Re-seed the torch generator for stochastic prediction. fit_pigauto()
-  # seeds training, but prediction rebuilds the module and then consumes
-  # dropout and Normal draws from the process-global torch generator. Without
-  # an explicit prediction seed, two otherwise identical impute(..., seed = s)
-  # calls can differ according to unrelated torch work performed in between.
-  # The stored fit seed makes the public seed contract reproducible while
-  # different user seeds still generate different imputations.
-  if (n_imp > 1L) {
-    if (!is.null(cfg$seed)) {
-      prediction_seed <- as.integer(cfg$seed) + 100000L
-      torch::torch_manual_seed(prediction_seed)
+  if (!gnn_off) {
+    # Re-seed the torch generator for stochastic prediction. fit_pigauto()
+    # seeds training, but prediction rebuilds the module and then consumes
+    # dropout and Normal draws from the process-global torch generator. Without
+    # an explicit prediction seed, two otherwise identical impute(..., seed = s)
+    # calls can differ according to unrelated torch work performed in between.
+    # The stored fit seed makes the public seed contract reproducible while
+    # different user seeds still generate different imputations.
+    if (n_imp > 1L) {
+      if (!is.null(cfg$seed)) {
+        prediction_seed <- as.integer(cfg$seed) + 100000L
+        torch::torch_manual_seed(prediction_seed)
+      }
     }
   }
 
-  # Pre-create calibrated gates tensors (once, outside the loop).
+  # Pre-create calibrated gate vectors (once, outside the loop).
   # Three-way blend: pred = r_bm * BM_draw + r_gnn * GNN_delta + r_mean * MEAN
   # Backward-compat fallback: legacy v0.9.1 fits only have calibrated_gates /
   # r_cal (scalar per col). When r_cal_bm / r_cal_mean are missing, reconstruct
@@ -454,111 +556,173 @@ predict.pigauto_fit <- function(object, newdata = NULL, return_se = TRUE,
     r_gnn_vec  <- numeric_calibration_slot(r_gnn_vec, "r_cal_gnn")
     r_mean_vec <- numeric_calibration_slot(r_mean_vec, "r_cal_mean")
     mean_vec   <- numeric_calibration_slot(mean_vec, "mean_baseline_per_col")
-    t_w_bm          <- torch::torch_tensor(r_bm_vec,   dtype = torch::torch_float(),
-                                           device = device)$unsqueeze(1L)
-    t_w_gnn         <- torch::torch_tensor(r_gnn_vec,  dtype = torch::torch_float(),
-                                           device = device)$unsqueeze(1L)
-    t_w_mean        <- torch::torch_tensor(r_mean_vec, dtype = torch::torch_float(),
-                                           device = device)$unsqueeze(1L)
-    t_mean_baseline <- torch::torch_tensor(mean_vec,   dtype = torch::torch_float(),
-                                           device = device)$unsqueeze(1L)
-    t_cal_gates     <- t_w_gnn  # legacy alias: downstream code that references
-                                 # t_cal_gates directly still gets the GNN gate
+    if (!gnn_off) {
+      t_w_bm          <- torch::torch_tensor(r_bm_vec,   dtype = torch::torch_float(),
+                                             device = device)$unsqueeze(1L)
+      t_w_gnn         <- torch::torch_tensor(r_gnn_vec,  dtype = torch::torch_float(),
+                                             device = device)$unsqueeze(1L)
+      t_w_mean        <- torch::torch_tensor(r_mean_vec, dtype = torch::torch_float(),
+                                             device = device)$unsqueeze(1L)
+      t_mean_baseline <- torch::torch_tensor(mean_vec,   dtype = torch::torch_float(),
+                                             device = device)$unsqueeze(1L)
+      t_cal_gates     <- t_w_gnn  # legacy alias: downstream code that references
+                                   # t_cal_gates directly still gets the GNN gate
+    }
+  } else if (gnn_off) {
+    stop("`gnn = FALSE` fits require calibrated gates (r_cal_bm etc.), but ",
+         "this fit has none. This indicates a malformed fit object.",
+         call. = FALSE)
   }
 
-  # BM SE tensor for MC dropout BM-draw injection (latent / z-score scale).
+  # BM SE (latent / z-score scale) for MC dropout / MI BM-draw injection.
   # BM_SE = 0 for observed cells → observed values never perturbed.
-  # BM_SE > 0 for originally-missing cells → t_BM_draw ~ N(BM_mu, BM_se)
-  # per imputation, held fixed across refine steps so each m draws ONE
-  # consistent BM posterior sample.  The blend then uses t_BM_draw instead
-  # of t_MU in the (1 - gate) term:
-  #   pred = (1-r)*t_BM_draw + r*delta_dropout
-  # → when gate=0: pred = t_BM_draw  ← proper BM posterior draw, non-zero variance
-  # → when gate>0: both BM draws and GNN dropout contribute variance
+  # BM_SE > 0 for originally-missing cells → BM_draw ~ N(BM_mu, BM_se)
+  # per imputation, held fixed across refine steps (GNN-on) or used directly
+  # as the single-shot blend input (gnn = FALSE) so each m draws ONE
+  # consistent BM posterior sample.  The blend then uses BM_draw instead
+  # of MU in the r_bm term:
+  #   pred = r_bm*BM_draw + r_gnn*delta_dropout + r_mean*MEAN
+  # → when gate=0: pred = BM_draw  ← proper BM posterior draw, non-zero variance
+  # → when gate>0 (GNN-on only): both BM draws and GNN dropout contribute variance
   if (n_imp > 1L) {
     bse_mat <- effective_baseline$se            # n_species x p_latent
     if (multi_obs) bse_mat <- bse_mat[obs_to_sp, , drop = FALSE]
-    t_BM_SE <- torch::torch_tensor(
-      bse_mat, dtype = torch::torch_float(), device = device
-    )
+    if (!gnn_off) {
+      t_BM_SE <- torch::torch_tensor(
+        bse_mat, dtype = torch::torch_float(), device = device
+      )
+    }
   }
 
-  # Default: deterministic baseline for n_imp == 1 path (same as t_MU).
-  # Overwritten each iteration when n_imp > 1.
-  t_BM_draw <- t_MU
-
-  for (m in seq_len(n_imp)) {
-    last_pred <- NULL
-    if (n_imp == 1L) {
-      model$eval()
-      X_iter <- t_X_fill$clone()
-      # t_BM_draw stays as t_MU  → blend is identical to original single-pass
+  if (gnn_off) {
+    # ---- Plain-R blend (no GNN): pred = r_bm * MU_m + r_mean * mean_baseline
+    # (r_gnn = 0, since there is no GNN delta under gnn = FALSE). There is no
+    # refine loop either -- with no GNN correction to refine, one pass per
+    # imputation is the whole computation.
+    #
+    # RNG isolation: seed with cfg$seed + 100000L, the same prediction-seed
+    # contract as the torch re-seed above, then restore the caller's RNG
+    # state so predict() has no side effects on unrelated code.
+    old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+      get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
     } else {
-      model$train()   # activates dropout on GNN hidden layers
-      # Draw one BM posterior sample for this imputation.
-      # BM_SE = 0 for observed cells → X_iter unchanged at observed positions.
-      noise     <- torch::torch_randn(c(n, p), dtype = torch::torch_float(),
-                                     device = device)
-      t_BM_draw <- t_MU + noise * t_BM_SE   # fixed BM draw for this m
-      X_iter    <- t_BM_draw$clone()          # GNN input starts from BM draw
-      if (!is.null(t_observed_mask)) {
-        X_iter <- torch::torch_where(t_observed_mask, t_observed_values, X_iter)
-      }
+      NULL
     }
-    torch::with_no_grad({
-      mask_ind0 <- torch::torch_zeros(c(n, 1L), device = device)
-      for (step in seq_len(cfg$refine_steps)) {
-        covs0 <- make_covs_tensor(t_MU, mask_ind0, t_covariates)
-        out   <- model(X_iter, t_coords, covs0, t_adj, t_obs_to_sp,
-                       D_sq = t_D_sq)
-        # Use t_BM_draw (the BM posterior sample) in the baseline term so that
-        # between-imputation variance is non-zero even when the gate is 0.
-        if (use_calibrated) {
-          pred <- t_w_bm * t_BM_draw + t_w_gnn * out$delta +
-                  t_w_mean * t_mean_baseline
-        } else {
-          pred <- (1 - out$rs) * t_BM_draw + out$rs * out$delta
-        }
-        if (!is.null(t_mps_cov_fixed_effects)) {
-          pred <- pred + t_mps_cov_fixed_effects
-        } else if (!is.null(out$fixed_effects)) {
-          pred <- pred + out$fixed_effects
-        }
-        last_pred <- pred
-        # Drop the previous X_iter before binding the new one so that the
-        # old forward-pass intermediates (attention matrices, FFN outputs,
-        # and all their stored views) become unreachable and available for
-        # the caching allocator to reclaim on cuda_empty_cache().  At
-        # n=5000 with refine_steps=8 and n_imputations=5, skipping this
-        # step causes ~22 GB of attention-per-step to pile up across
-        # refinements -- see job 4745401 (n=5000, DEBUG_GPU_MEM=1) for
-        # the reproducer.
-        X_iter <- if (!is.null(t_observed_mask)) {
-          torch::torch_where(t_observed_mask, t_observed_values, pred)
-        } else {
-          pred
-        }
-        # Preserve `out` for the last-iteration reference at line ~283
-        # (rs_val <- out$rs$cpu()$squeeze()).  Drop covs0 and pred
-        # which are safe to release -- X_iter holds the latest pred's
-        # value and the next iteration rebinds both.
-        rm(covs0, pred)
+    on.exit({
+      if (!is.null(old_seed)) {
+        assign(".Random.seed", old_seed, envir = .GlobalEnv)
+      } else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+        rm(".Random.seed", envir = .GlobalEnv)
       }
-      rm(mask_ind0)
-    })
-    # Release the accumulated intra-draw intermediates before the next
-    # MI draw starts. cuda_empty_cache() actually reclaims the allocator
-    # blocks -- without it, torch holds the 22 GB chunk forever.
-    if (torch::cuda_is_available()) {
-      try(torch::cuda_empty_cache(), silent = TRUE)
+    }, add = TRUE)
+    if (n_imp > 1L && !is.null(cfg$seed)) {
+      set.seed(as.integer(cfg$seed) + 100000L)
     }
-    if (is.null(last_pred)) last_pred <- X_iter
-    latent_runs[[m]] <- as.matrix(last_pred$cpu())
-    gpu_mem_checkpoint(sprintf("predict: after MI draw %d / %d", m, n_imp))
-  }
 
-  # Residual scale (per-column vector or legacy scalar)
-  rs_val <- as.numeric(out$rs$cpu()$squeeze())
+    # Arm parity with the GNN-on path: `latent_runs[[m]]` stores the raw
+    # blend at EVERY cell, observed included -- the GNN-on path never
+    # restores observed cells into `last_pred` either (only into `X_iter`,
+    # the next refine step's model input), so the two arms must differ only
+    # in the GNN term, not in whether observed cells are patched back in.
+    # This is safe for BM-eligible columns because `MU` (`baseline_mu`) is
+    # already exactly the observed value at observed cells with `se = 0`
+    # (bse_mat = 0 there), so `MU_m == MU` at those cells regardless of
+    # `n_imp` -- the only thing that changes at an observed cell is the
+    # mean-floor pull `r_mean * mean_baseline_per_col`, matching what the
+    # GNN-on blend already does at observed cells.
+    mean_term <- r_mean_vec * mean_vec   # per-column constant, broadcast over rows
+    for (m in seq_len(n_imp)) {
+      if (n_imp == 1L) {
+        MU_m <- MU
+      } else {
+        # Draw one BM posterior sample for this imputation. BM_SE = 0 for
+        # observed cells → MU_m unchanged at observed positions.
+        noise <- matrix(stats::rnorm(n * p), nrow = n, ncol = p)
+        MU_m  <- MU + noise * bse_mat
+      }
+      pred <- sweep(MU_m, 2, r_bm_vec, "*")
+      pred <- sweep(pred, 2, mean_term, "+")
+      latent_runs[[m]] <- pred
+    }
+    rs_val <- rep(0, p)
+  } else {
+    # Default: deterministic baseline for n_imp == 1 path (same as t_MU).
+    # Overwritten each iteration when n_imp > 1.
+    t_BM_draw <- t_MU
+
+    for (m in seq_len(n_imp)) {
+      last_pred <- NULL
+      if (n_imp == 1L) {
+        model$eval()
+        X_iter <- t_X_fill$clone()
+        # t_BM_draw stays as t_MU  → blend is identical to original single-pass
+      } else {
+        model$train()   # activates dropout on GNN hidden layers
+        # Draw one BM posterior sample for this imputation.
+        # BM_SE = 0 for observed cells → X_iter unchanged at observed positions.
+        noise     <- torch::torch_randn(c(n, p), dtype = torch::torch_float(),
+                                       device = device)
+        t_BM_draw <- t_MU + noise * t_BM_SE   # fixed BM draw for this m
+        X_iter    <- t_BM_draw$clone()          # GNN input starts from BM draw
+        if (!is.null(t_observed_mask)) {
+          X_iter <- torch::torch_where(t_observed_mask, t_observed_values, X_iter)
+        }
+      }
+      torch::with_no_grad({
+        mask_ind0 <- torch::torch_zeros(c(n, 1L), device = device)
+        for (step in seq_len(cfg$refine_steps)) {
+          covs0 <- make_covs_tensor(t_MU, mask_ind0, t_covariates)
+          out   <- model(X_iter, t_coords, covs0, t_adj, t_obs_to_sp,
+                         D_sq = t_D_sq)
+          # Use t_BM_draw (the BM posterior sample) in the baseline term so that
+          # between-imputation variance is non-zero even when the gate is 0.
+          if (use_calibrated) {
+            pred <- t_w_bm * t_BM_draw + t_w_gnn * out$delta +
+                    t_w_mean * t_mean_baseline
+          } else {
+            pred <- (1 - out$rs) * t_BM_draw + out$rs * out$delta
+          }
+          if (!is.null(t_mps_cov_fixed_effects)) {
+            pred <- pred + t_mps_cov_fixed_effects
+          } else if (!is.null(out$fixed_effects)) {
+            pred <- pred + out$fixed_effects
+          }
+          last_pred <- pred
+          # Drop the previous X_iter before binding the new one so that the
+          # old forward-pass intermediates (attention matrices, FFN outputs,
+          # and all their stored views) become unreachable and available for
+          # the caching allocator to reclaim on cuda_empty_cache().  At
+          # n=5000 with refine_steps=8 and n_imputations=5, skipping this
+          # step causes ~22 GB of attention-per-step to pile up across
+          # refinements -- see job 4745401 (n=5000, DEBUG_GPU_MEM=1) for
+          # the reproducer.
+          X_iter <- if (!is.null(t_observed_mask)) {
+            torch::torch_where(t_observed_mask, t_observed_values, pred)
+          } else {
+            pred
+          }
+          # Preserve `out` for the last-iteration reference at line ~283
+          # (rs_val <- out$rs$cpu()$squeeze()).  Drop covs0 and pred
+          # which are safe to release -- X_iter holds the latest pred's
+          # value and the next iteration rebinds both.
+          rm(covs0, pred)
+        }
+        rm(mask_ind0)
+      })
+      # Release the accumulated intra-draw intermediates before the next
+      # MI draw starts. cuda_empty_cache() actually reclaims the allocator
+      # blocks -- without it, torch holds the 22 GB chunk forever.
+      if (torch::cuda_is_available()) {
+        try(torch::cuda_empty_cache(), silent = TRUE)
+      }
+      if (is.null(last_pred)) last_pred <- X_iter
+      latent_runs[[m]] <- as.matrix(last_pred$cpu())
+      gpu_mem_checkpoint(sprintf("predict: after MI draw %d / %d", m, n_imp))
+    }
+
+    # Residual scale (per-column vector or legacy scalar)
+    rs_val <- as.numeric(out$rs$cpu()$squeeze())
+  }
 
   # ---- Legacy path: no trait_map (old pigauto_fit objects) -----------------
   if (!has_trait_map) {
@@ -663,20 +827,54 @@ predict.pigauto_fit <- function(object, newdata = NULL, return_se = TRUE,
     rownames(conformal_lower) <- row_labels
     rownames(conformal_upper) <- row_labels
 
+    # Mondrian (B2, 2026-08-16): each target cell's conformal score
+    # depends on its phylogenetic locality relative to the SAME
+    # training-time observed set used at calibration (fit_pigauto.R's
+    # M_obs_mat = observed AND not held out for val/test). Reconstructed
+    # here from object$X_scaled + object$splits rather than stored
+    # directly on the fit, matching how PMM (match_observed = "pmm")
+    # already recovers observed cells from X_scaled above. Single-obs
+    # only -- fit_pigauto() errors at fit time for multi_obs, so
+    # `multi_obs` here should already be FALSE whenever this fires; the
+    # check is defensive.
+    #
+    # Per-cell stratum logic extracted to mondrian_cell_scores() so
+    # multi_impute()'s conformal draws can reuse it identically (see that
+    # function's roxygen for the refactor rationale).
+    cell_scores <- if (!multi_obs) {
+      mondrian_cell_scores(object, D_sq, trait_map, n)
+    } else {
+      NULL
+    }
+
     for (tm in trait_map) {
       nm <- tm$name
       lc <- tm$latent_cols
 
-      if (!(tm$type %in% c("continuous", "count", "ordinal", "proportion"))) next
+      if (!(tm$type %in%
+            c("continuous", "count", "ordinal", "proportion", "zi_count"))) next
       if (is.na(conformal_scores_out[nm])) next
 
-      q <- conformal_scores_out[nm]
+      # zi_count is scored on the magnitude (log1p-z) column, not the
+      # Bernoulli gate -- must match fit_helpers.R's compute_conformal_scores()
+      # `score_col`, both for reading conformal_scores_out[nm] above.
+      score_col <- if (identical(tm$type, "zi_count")) lc[2L] else lc[1L]
+
+      # q_vec: per-row conformal half-width. Constant (global score) for
+      # "split" / "bootstrap"; per-row near/far stratum score for
+      # "mondrian" (rows whose locality can't be computed, e.g. no
+      # observed species for this trait, keep the global fallback value).
+      q_vec <- if (!is.null(cell_scores) && !is.na(cell_scores$scores[1L, nm])) {
+        cell_scores$scores[, nm]
+      } else {
+        rep(conformal_scores_out[nm], n)
+      }
 
       if (tm$type == "continuous") {
         # Convert conformal score from latent to original scale
         pred_latent <- latent_pred[, lc[1]]
-        pred_low  <- (pred_latent - q) * tm$sd + tm$mean
-        pred_high <- (pred_latent + q) * tm$sd + tm$mean
+        pred_low  <- (pred_latent - q_vec) * tm$sd + tm$mean
+        pred_high <- (pred_latent + q_vec) * tm$sd + tm$mean
         if (isTRUE(tm$log_transform)) {
           conformal_lower[, nm] <- exp(pred_low)
           conformal_upper[, nm] <- exp(pred_high)
@@ -687,25 +885,39 @@ predict.pigauto_fit <- function(object, newdata = NULL, return_se = TRUE,
 
       } else if (tm$type == "count") {
         pred_latent <- latent_pred[, lc[1]]
-        pred_low  <- (pred_latent - q) * tm$sd + tm$mean
-        pred_high <- (pred_latent + q) * tm$sd + tm$mean
+        pred_low  <- (pred_latent - q_vec) * tm$sd + tm$mean
+        pred_high <- (pred_latent + q_vec) * tm$sd + tm$mean
         conformal_lower[, nm] <- pmax(expm1(pred_low), 0)
         conformal_upper[, nm] <- expm1(pred_high)
 
       } else if (tm$type == "ordinal") {
         pred_latent <- latent_pred[, lc[1]]
-        pred_low  <- (pred_latent - q) * tm$sd + tm$mean
-        pred_high <- (pred_latent + q) * tm$sd + tm$mean
+        pred_low  <- (pred_latent - q_vec) * tm$sd + tm$mean
+        pred_high <- (pred_latent + q_vec) * tm$sd + tm$mean
         K <- length(tm$levels)
         conformal_lower[, nm] <- pmax(round(pred_low), 0)
         conformal_upper[, nm] <- pmin(round(pred_high), K - 1L)
 
       } else if (tm$type == "proportion") {
         pred_latent <- latent_pred[, lc[1]]
-        pred_low  <- (pred_latent - q) * tm$sd + tm$mean
-        pred_high <- (pred_latent + q) * tm$sd + tm$mean
+        pred_low  <- (pred_latent - q_vec) * tm$sd + tm$mean
+        pred_high <- (pred_latent + q_vec) * tm$sd + tm$mean
         conformal_lower[, nm] <- stats::plogis(pred_low)
         conformal_upper[, nm] <- stats::plogis(pred_high)
+
+      } else if (tm$type == "zi_count") {
+        # Conditional-on-nonzero interval: back-transform the magnitude
+        # latent (log1p-z of counts | nonzero) +/- the conformal half-width,
+        # which was calibrated on this same magnitude column
+        # (fit_helpers.R's compute_conformal_scores(), score_col = lc[2]).
+        # This is NOT an interval for E[X] = P(nonzero) * E[count|nonzero] --
+        # see the "Conformal intervals" details above and pred$probabilities
+        # for the gate probability P(nonzero).
+        pred_latent <- latent_pred[, score_col]
+        pred_low  <- (pred_latent - q_vec) * tm$sd + tm$mean
+        pred_high <- (pred_latent + q_vec) * tm$sd + tm$mean
+        conformal_lower[, nm] <- pmax(expm1(pred_low), 0)
+        conformal_upper[, nm] <- expm1(pred_high)
       }
     }
   }
@@ -1288,6 +1500,7 @@ latent_names_from_map <- function(trait_map) {
 #' @export
 print.pigauto_fit <- function(x, ...) {
   cat("pigauto_fit\n")
+  if (isFALSE(x$model_config$gnn)) cat("  GNN     : off (baseline only)\n")
   cat("  Species :", length(x$species_names), "\n")
   cat("  Traits  :", length(x$trait_names),
       "--", paste(x$trait_names, collapse = ", "), "\n")
@@ -1361,4 +1574,116 @@ print.pigauto_pred <- function(x, ...) {
     cat("  Conformal 95% intervals: yes\n")
   }
   invisible(x)
+}
+
+.pigauto_assert_predictable_state <- function(object) {
+  state <- object$model_state
+  if (is.null(state) || !length(state)) return(invisible(NULL))
+  item <- state[[1L]]
+  rds_msg <- paste(
+    "This pigauto_fit cannot be used after saveRDS()/readRDS().",
+    "Use save_pigauto() and load_pigauto() instead."
+  )
+  if (is.raw(item)) {
+    stop("This pigauto_fit still has a serialised model_state. ",
+         "Load it with load_pigauto() after save_pigauto().",
+         call. = FALSE)
+  }
+  if (!inherits(item, "torch_tensor")) {
+    stop(rds_msg, call. = FALSE)
+  }
+  ok <- tryCatch({
+    item$device
+    TRUE
+  }, error = function(e) FALSE)
+  if (!ok) stop(rds_msg, call. = FALSE)
+  invisible(NULL)
+}
+
+
+# ---- Internal: per-cell Mondrian conformal half-width (latent scale) ------
+#' Per-cell Mondrian conformal half-widths (internal)
+#'
+#' Extracted from `predict.pigauto_fit()`'s conformal-interval loop (B2,
+#' 2026-08-16) so [multi_impute()]'s conformal draws can reuse the identical
+#' per-row near/far stratum logic instead of the single global conformal
+#' score. `predict.pigauto_fit()` calls this and its numeric output is
+#' unchanged by the refactor.
+#'
+#' Only trait types scored by `compute_conformal_scores()` (continuous,
+#' count, ordinal, proportion, zi_count magnitude) get a populated column;
+#' other columns, and any trait with no conformal score at all, are left
+#' `NA`. When `object$conformal_method` is not `"mondrian"`, or the fit
+#' does not carry the pieces Mondrian needs (`conformal_mondrian`,
+#' `X_scaled`, and a non-NULL `D_sq`), every populated column is just the
+#' constant global score repeated `n` times -- i.e. this degrades to the
+#' "split" / "bootstrap" behaviour exactly.
+#'
+#' @param object a `pigauto_fit`.
+#' @param D_sq `n_species x n_species` squared cophenetic distance matrix
+#'   (`object$graph$D_sq`), or `NULL`.
+#' @param trait_map trait map (list of descriptors) for the predicted data.
+#' @param n number of prediction rows. Mondrian is single-obs-only, so this
+#'   is `n_species`.
+#' @return `NULL` if `object$conformal_scores` is `NULL`; otherwise a list
+#'   with `scores` (`n x n_traits` matrix, latent scale, `NA` columns for
+#'   traits with no conformal score; column names are trait names) and
+#'   `score_cols` (named integer vector, trait name -> the latent column
+#'   each trait's score was computed on; zi_count uses the magnitude
+#'   column, not the gate).
+#' @keywords internal
+#' @noRd
+mondrian_cell_scores <- function(object, D_sq, trait_map, n) {
+  cs <- object$conformal_scores
+  if (is.null(cs)) return(NULL)
+
+  trait_names <- vapply(trait_map, "[[", character(1), "name")
+  n_traits <- length(trait_names)
+  scores <- matrix(NA_real_, nrow = n, ncol = n_traits,
+                    dimnames = list(NULL, trait_names))
+  score_cols <- stats::setNames(integer(n_traits), trait_names)
+
+  use_mondrian <- identical(object$conformal_method, "mondrian") &&
+    !is.null(object$conformal_mondrian) &&
+    !is.null(D_sq) && !is.null(object$X_scaled)
+
+  obs_mask_train <- NULL
+  if (use_mondrian) {
+    obs_mask_train <- !is.na(object$X_scaled)
+    hold <- c(object$splits$val_idx, object$splits$test_idx)
+    if (length(hold)) obs_mask_train[hold] <- FALSE
+  }
+
+  for (tm in trait_map) {
+    nm <- tm$name
+    lc <- tm$latent_cols
+    if (!(tm$type %in%
+          c("continuous", "count", "ordinal", "proportion", "zi_count"))) next
+    if (is.na(cs[nm])) next
+
+    # zi_count is scored on the magnitude (log1p-z) column, not the
+    # Bernoulli gate -- must match fit_helpers.R's compute_conformal_scores()
+    # `score_col`.
+    score_col <- if (identical(tm$type, "zi_count")) lc[2L] else lc[1L]
+    score_cols[nm] <- score_col
+
+    q_vec <- rep(cs[nm], n)
+    if (use_mondrian) {
+      mo <- object$conformal_mondrian[[nm]]
+      if (!is.null(mo) && !isTRUE(mo$fallback)) {
+        obs_idx <- which(obs_mask_train[, score_col])
+        if (length(obs_idx) > 0L) {
+          locality <- mondrian_locality(D_sq, obs_idx, seq_len(n), k = 5L)
+          loc_ok <- is.finite(locality)
+          far  <- loc_ok & (locality > mo$threshold)
+          near <- loc_ok & !far
+          q_vec[far]  <- mo$far_score
+          q_vec[near] <- mo$near_score
+        }
+      }
+    }
+    scores[, nm] <- q_vec
+  }
+
+  list(scores = scores, score_cols = score_cols)
 }

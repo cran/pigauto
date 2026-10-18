@@ -248,6 +248,12 @@ ensemble formula, the phylogenetic baseline (joint MVN / threshold-joint
 / OVR), the GNN’s transformer blocks, the optional within-row
 cross-trait attention added in v0.9.3, and the calibration / uncertainty
 quantification machinery on top.</p>
+<p>The GNN described here runs only when <code>gnn = TRUE</code>. Since
+version 0.11.0.9001 the default is <code>gnn = FALSE</code>, which fits
+the phylogenetic baseline and the calibration and uncertainty machinery
+without a network; at the current baseline defaults the GNN did not
+lower imputation error on simulated or real benchmark data. User
+<code>covariates</code> are used only by the GNN.</p>
 <p>We assume familiarity with maximum-likelihood Brownian motion (BM) on
 trees and with standard transformer attention. We do
 <strong>not</strong> assume familiarity with the package’s
@@ -336,19 +342,41 @@ one logit column.</p>
 </div>
 <div id="joint-mvn-baseline-phase-2" class="section level3">
 <h3>2.3 Joint MVN baseline (Phase 2)</h3>
-<p>When <code>Rphylopars</code> is installed and ≥ 2 continuous-like
-latent columns exist, pigauto upgrades to a joint multivariate-BM
-baseline. Stack the <span class="math inline">\(p\)</span> BM-eligible
-columns into <span class="math inline">\(\mathbf{Y}\)</span>. Under
-joint BM, <span class="math inline">\(\mathrm{vec}(\mathbf{Y}) \sim
+<p>When ≥ 2 continuous-like latent columns exist, pigauto upgrades to a
+joint multivariate-BM baseline. Stack the <span class="math inline">\(p\)</span> BM-eligible columns into <span class="math inline">\(\mathbf{Y}\)</span>. Under joint BM, <span class="math inline">\(\mathrm{vec}(\mathbf{Y}) \sim
 \mathcal{N}(\mathrm{vec}(\boldsymbol{\beta}),\,
-\mathbf{\Sigma} \otimes \mathbf{R})\)</span>.
-<code>Rphylopars::phylopars()</code> fits <span class="math inline">\(\hat{\mathbf{\Sigma}}\)</span> jointly across
-traits, and the conditional posterior is the GLS solution with the
+\mathbf{\Sigma} \otimes \mathbf{R})\)</span>. pigauto’s <strong>in-house
+solver</strong> (<code>R/joint_mvn_solver.R</code>) fits <span class="math inline">\(\hat{\mathbf{\Sigma}}\)</span> jointly across
+traits and the conditional posterior is the GLS solution with the
 Kronecker covariance. This captures cross-trait phylogenetic correlation
-that the per-column path loses. The bench in
-<code>script/bench_joint_baseline.R</code> showed a 33.7% RMSE lift on
-simulated correlated BM data.</p>
+that the per-column path loses.</p>
+<p>Two points of precision, since both were previously misstated
+here:</p>
+<p><em>The solver is pigauto’s own, not <code>Rphylopars</code>.</em>
+Earlier versions delegated to <code>Rphylopars::phylopars()</code> and
+this section still credited it; <code>joint_mvn_available()</code> now
+returns <code>TRUE</code> unconditionally and the joint path has no
+<code>Rphylopars</code> dependency. (<code>Rphylopars</code> remains in
+<code>Suggests</code> for comparison benchmarks only.)</p>
+<p><em>What the shipped default computes.</em> The solver’s
+<code>max_iter</code> argument defaults to <code>0</code>, which returns
+the closed-form <span class="math inline">\(\hat{\mathbf{\Sigma}} =
+\mathbf{L}^\top \mathbf{R}^{-1} \mathbf{L} / n\)</span> estimate —
+consistent under matrix-normal BM. What <code>max_iter = 0</code>
+switches off is the <em>cross-trait EM cell-refinement</em> loop,
+disabled in 2026-05 because it diverged on strong-signal data (the
+conditional prior ignores <span class="math inline">\(\mathbf{R}\)</span>-mediated cross-row
+correlation, and <span class="math inline">\(\mathbf{R}^{-1}\)</span>
+amplifies the resulting discrepancy into a multiplicative <span class="math inline">\(\mathbf{\Sigma}\)</span> blow-up). The non-refined
+path was empirically much better on synthetic <span class="math inline">\(K=5\)</span> BM data (0.93 vs 0.53 argmax accuracy
+at <span class="math inline">\(n=100\)</span>, 30% missing). So <span class="math inline">\(\hat{\mathbf{\Sigma}}\)</span> <em>is</em>
+estimated jointly; it is the iterative cell refinement on top that is
+off by default, and deliberately so.</p>
+<p>The bench in <code>script/bench_joint_baseline.R</code> reported a
+33.7% RMSE lift on simulated correlated BM data. That figure predates
+the in-house solver and has not been re-measured against it — treat it
+as indicative of the joint-vs-per-column direction, not as a current
+performance number for the shipped path.</p>
 </div>
 <div id="threshold-joint-baseline-phase-3" class="section level3">
 <h3>2.4 Threshold-joint baseline (Phase 3)</h3>
@@ -359,20 +387,20 @@ liability model: each observed binary cell <span class="math inline">\(y
 continuous <em>liability</em> <span class="math inline">\(L\)</span>
 truncated by <span class="math inline">\(y\)</span>. With prior <span class="math inline">\(L \sim \mathcal{N}(0, 1)\)</span> this is the
 standard truncated-normal mean. The resulting matrix is then handed to
-<code>phylopars()</code> exactly like the continuous case. Binary
-posteriors are decoded back to probabilities via <span class="math inline">\(p = \Phi\bigl(\mu_L / \sqrt{1 +
+the same <strong>in-house joint solver</strong> as the continuous case.
+Binary posteriors are decoded back to probabilities via <span class="math inline">\(p = \Phi\bigl(\mu_L / \sqrt{1 +
 \sigma_L^2}\bigr)\)</span>, clipped to <span class="math inline">\([0.01, 0.99]\)</span>. Ordinal liability uses K-1
 interval cuts (B3 ordinal).</p>
 </div>
 <div id="ovr-categorical-phase-6" class="section level3">
 <h3>2.5 OVR categorical (Phase 6)</h3>
 <p>The single-fit approach to categorical liability (K columns into one
-phylopars call) is rank-deficient and unstable. pigauto instead runs
-<span class="math inline">\(K\)</span> independent threshold-joint fits
-— class <span class="math inline">\(k\)</span> vs the rest — and
+joint call) is rank-deficient and unstable. pigauto instead runs <span class="math inline">\(K\)</span> independent threshold-joint fits —
+class <span class="math inline">\(k\)</span> vs the rest — and
 renormalises the resulting <span class="math inline">\(K\)</span>
-probabilities into a row-stochastic distribution. This one-vs-rest
-strategy lifts AVONET Trophic.Level accuracy from ~42% to ~72%.</p>
+probabilities into a row-stochastic distribution. That is a
+numerical-stability choice, not a published accuracy lift for this
+package.</p>
 </div>
 <div id="multi-obs-aggregation-phase-10-b1-soft" class="section level3">
 <h3>2.6 Multi-obs aggregation (Phase 10 + B1 soft)</h3>
@@ -386,9 +414,9 @@ observed as class 1 in 6/10 rows uses the convex combination <span class="math i
 </div>
 <div id="the-gnn-residualphylodae" class="section level2">
 <h2>3. The GNN: ResidualPhyloDAE</h2>
-<p>The GNN’s job is to learn an <em>additive correction</em> on top of
-the phylogenetic baseline. It is a denoising autoencoder (DAE) trained
-with masked-cell reconstruction loss.</p>
+<p>The optional GNN learns a full per-cell prediction that is blended
+with the phylogenetic baseline. It is a denoising autoencoder (DAE)
+trained with masked-cell reconstruction loss.</p>
 <blockquote>
 <p><strong>Name note.</strong> The torch class is
 <code>ResidualPhyloDAE</code> because its internal blocks use
@@ -498,7 +526,7 @@ on CLR for multi-proportion.</li>
 <li><span class="math inline">\(\lambda_\text{gate}\)</span> (default
 0.01) actively pushes the gate toward zero. Without this term, <span class="math inline">\(\rho\)</span> has no gradient when delta ≈ μ (both
 shrinkage and reconstruction losses are zero), so the gate would stay at
-its init. The explicit penalty guarantees the gate defaults toward
+its init. The explicit penalty encourages the gate toward
 baseline-only.</li>
 </ul>
 <p>Together with the architectural cap (<code>gate_cap</code> ≤ 0.8 by
@@ -524,27 +552,9 @@ self-attention block (<code>n_trait_heads</code>, default 2) mixes these
 <span class="math inline">\(e_d\)</span>-dim feature. That feature is
 concatenated alongside <span class="math inline">\((x, \text{coords},
 \text{covs})\)</span> at the encoder input.</p>
-<p>The mechanism is intended for trait sets with strong within-row
-functional coupling that the joint MVN baseline cannot already capture
-(non-Gaussian, nonlinear, or non-monotone cross-trait structure).
-<strong>On the BIEN plant bench it did not improve pooled RMSE</strong>
-— the joint MVN/threshold-joint path already encodes <span class="math inline">\(\mathbf{\Sigma}\)</span> for the dominant trait
-types, so the second cross-trait mechanism is redundant.</p>
-<p><strong>Independent verification (<a href="https://github.com/itchyshin/pigauto/issues/106">#106</a>, code in
-<a href="https://github.com/itchyshin/pigauto/pull/116">#116</a>):</strong>
-a 60-replicate ablation at N=2000 (5 seeds per cell, multi-trait DGP
-that fires the joint MVN baseline) confirmed <code>pigauto_OFF</code>
-beats both <code>pigauto_ON</code> and <code>pigauto_ON_L0</code> (the
-“lazy-optimiser disarmed” arm with <code>baseline_mu</code> masked and
-<code>lambda_shrink = 0</code>) — z-RMSE 1.038 vs 1.056 vs 1.057;
-conformal coverage stable at 0.884–0.887. Even with the lazy-optimiser
-trap disarmed, the network regresses against the baseline rather than
-finding new structure. See the NEWS entry for the full table.</p>
-<p>The flag ships as opt-in because it may help on datasets where the
-linear <span class="math inline">\(\mathbf{\Sigma}\)</span> assumption
-is too weak (e.g. functional traits with phase-transition or interaction
-structure), or in small-N regimes where the joint MVN baseline hasn’t
-yet converged on the cross-trait covariance.</p>
+<p>This opt-in mechanism changes the model architecture. Assess it with
+a held-out comparison on the intended data rather than transferring a
+result from another trait set or simulation regime.</p>
 <p>Backward-compatible: saved fits without the field default to
 <code>use_trait_attention = FALSE</code> and reconstruct
 identically.</p>
@@ -572,54 +582,35 @@ is exactly the baseline.</p>
 <h2>5. Uncertainty quantification</h2>
 <p>pigauto exposes three distinct uncertainty mechanisms; they answer
 different questions and must not be conflated.</p>
-<table>
-<colgroup>
-<col width="37%" />
-<col width="27%" />
-<col width="34%" />
-</colgroup>
-<thead>
-<tr class="header">
-<th>Mechanism</th>
-<th>Source</th>
-<th>Validity</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>pred$se</code> (cont./count/ordinal/prop.)</td>
-<td>Conditional-MVN SD from the BM baseline, delta-method
-back-transformed.</td>
-<td>Exact under BM, model-dependent.</td>
-</tr>
-<tr class="even">
-<td><code>pred$se</code> (binary/categorical)</td>
-<td><span class="math inline">\(\min(p, 1{-}p)\)</span> / <span class="math inline">\(1 - \max_k p_k\)</span> — uncertainty score,
-<strong>not</strong> a Gaussian SE.</td>
-<td>Use for ranking/reporting; do <strong>not</strong> plug into Rubin’s
-rules.</td>
-</tr>
-<tr class="odd">
-<td><code>pred$conformal_lower</code>,
-<code>pred$conformal_upper</code></td>
-<td>Split conformal residual quantile on the val set: <span class="math inline">\(s = q_{(1-\alpha)}( | y - \hat{y} |_{\text{val}}
-)\)</span>.</td>
-<td>Marginal prediction coverage under the split-conformal
-exchangeability and fixed calibration-procedure assumptions; not an MI
-draw distribution.</td>
-</tr>
-</tbody>
-</table>
+<p><strong>Baseline <code>pred$se</code> (continuous / count / ordinal /
+proportion).</strong> On the single-column BM path
+(<code>R/bm_internal.R</code>) this is the conditional-MVN standard
+deviation, delta-method back-transformed — exact under BM,
+model-dependent. When ≥ 2 BM-eligible columns use the joint /
+threshold-joint path, <code>pred$se</code> is the per-tip conditional SD
+<span class="math inline">\(\sigma\sqrt{v_i}\)</span> from the sparse
+Henderson precision (same factorisation as the mean; 2026-08 fix). That
+is model-dependent Henderson variance, not the single-trait closed-form
+“exact under BM” guarantee, and it does not use the un-restored
+cross-trait EM (<code>max_iter = 0</code>).</p>
+<p><strong><code>pred$se</code> (binary / categorical).</strong> <span class="math inline">\(\min(p, 1-p)\)</span> or <span class="math inline">\(1 - \max_k p_k\)</span> — an uncertainty score,
+<strong>not</strong> a Gaussian standard error. Use it for ranking or
+reporting. Do <strong>not</strong> plug it into Rubin’s rules.</p>
+<p><strong>Conformal interval (<code>pred$conformal_lower</code>,
+<code>pred$conformal_upper</code>).</strong> Split-conformal residual
+quantile on the validation set: <span class="math inline">\(s =
+q_{(1-\alpha)}(|y - \hat{y}|_{\mathrm{val}})\)</span>. This is a
+marginal prediction-coverage diagnostic under exchangeability and a
+fixed calibration procedure. It is not an MI draw distribution.</p>
 <p>For prediction diagnostics, <code>multi_impute()</code> exposes two
-stochastic draw methods. <code>&quot;conformal&quot;</code> (default) uses the
-heuristic <span class="math inline">\(\mathcal{N}(\mu, s/1.96)\)</span>
-on the transformed scale, where <span class="math inline">\(s\)</span>
-is the conformal residual quantile. A conformal prediction interval does
-not by itself establish that these Normal draws are proper multiple
-imputations. <code>&quot;mc_dropout&quot;</code> runs <span class="math inline">\(M\)</span> stochastic GNN passes in training mode
-(dropout active) on top of BM-draw inputs. A 3,000-fit campaign found
-that neither legacy draw method passed any of the 12 downstream
-fixed-effect cells; PMM also failed its redesign pilot. These paths are
+stochastic draw methods. <code>&quot;conformal&quot;</code> (chosen by the default
+<code>draws_method = &quot;auto&quot;</code> when the posterior route does not
+apply) uses the heuristic <span class="math inline">\(\mathcal{N}(\mu,
+s/1.96)\)</span> on the transformed scale, where <span class="math inline">\(s\)</span> is the conformal residual quantile. A
+conformal prediction interval does not by itself establish that these
+Normal draws are proper multiple imputations. <code>&quot;mc_dropout&quot;</code>
+runs <span class="math inline">\(M\)</span> stochastic GNN passes in
+training mode (dropout active) on top of BM-draw inputs. These paths are
 unsupported for inference.</p>
 <p>The separate experimental <code>multi_impute_analysis()</code>
 backend declares the substantive model before imputation. It supports
@@ -628,11 +619,8 @@ Bayesian normal-regression MI for Gaussian <code>lm</code>,
 <code>smcfcs</code> for binomial-logit <code>glm</code>, and
 <code>jomo.smc</code> for a Gaussian <code>lmer</code> with one random
 intercept. <code>pool_mi()</code> then applies Rubin’s rules to fixed
-effects only. The package implementation passed a warning-free
-6,000-task gate at clean SHA <code>2e3809d</code>, with all 24
-fixed-effect cells inside the predeclared bias, SE-ratio, coverage, fit,
-and finite-result bounds. The interface remains experimental and
-deliberately narrow.</p>
+effects only. The interface remains experimental and deliberately
+narrow.</p>
 </div>
 <div id="posterior-tree-prediction-sensitivity" class="section level2">
 <h2>6. Posterior-tree prediction sensitivity</h2>
@@ -663,9 +651,9 @@ calibration. The conformal interval is</p>
 \hat{y}_i \pm s_t,
 \]</span></p>
 <p>where <span class="math inline">\(s_t\)</span> is the split-conformal
-residual quantile for trait <span class="math inline">\(t\)</span>,
-giving <span class="math inline">\(\ge 95\%\)</span> marginal coverage
-on the original scale.</p>
+residual quantile for trait <span class="math inline">\(t\)</span>.
+Treat this as a nominal held-out diagnostic under the stated
+assumptions, not a package-wide interval certification.</p>
 </div>
 <div id="where-to-look-in-the-code" class="section level2">
 <h2>8. Where to look in the code</h2>

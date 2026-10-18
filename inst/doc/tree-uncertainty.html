@@ -351,43 +351,73 @@ combined with <code>multi_impute_analysis()</code>.</p>
 <p>Use this article only when you have a posterior sample of trees (from
 BEAST, MrBayes, BirdTree.org, etc.) and want to see how point
 imputations change across that sample.</p>
+<p>The bundled <code>trees300</code> object contains 50 trees sampled
+from the 100-tree BirdTree collection retrieved by
+<code>megatrees::get_tree_bird_n100()</code> and pruned to the 300
+AVONET species. That collection includes trees built with either the
+Ericson or Hackett backbone; the original studies are Ericson et
+al. (2006) and Hackett et al. (2008). Jetz et al. (2012) describes the
+BirdTree distributions. These are posterior-sample trees, not a
+maximum-clade-credibility tree.</p>
+<div id="supplying-posterior-trees" class="section level3">
+<h3>Supplying posterior trees</h3>
+<p>pigauto uses the tree or trees you provide. It does not download tree
+data while imputing. For the 100-tree BirdTree sample available through
+the optional <code>megatrees</code> package, install the package and
+request the sample explicitly:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">install.packages</span>(<span class="st">&quot;megatrees&quot;</span>)</span>
+<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a>bird_trees <span class="ot">&lt;-</span> megatrees<span class="sc">::</span><span class="fu">get_tree_bird_n100</span>()</span></code></pre></div>
+<p>An uncached request downloads the release asset through
+<code>megatrees</code> and needs internet access. For a species-specific
+sample, use the <a href="https://birdtree.org/subsets/">BirdTree subset
+tool</a>, then read the downloaded Newick file with
+<code>read_tree()</code>. The subset tool asks for an email address and
+job ID to check when the request is ready. Cite Jetz et al. (2012) for
+the tree and BirdTree.org when you use its website. Record the
+<code>megatrees</code> version and preserve the tree object with your
+analysis. For a single tree, pass the object to <code>impute()</code>;
+pass a posterior sample to <code>multi_impute_trees()</code> for the
+prediction-sensitivity workflow described below.</p>
+</div>
 </div>
 <div id="prediction-sensitivity-workflow" class="section level2">
 <h2>Prediction-sensitivity workflow</h2>
-<p>With <code>share_gnn = TRUE</code> (the default), the GNN is trained
-once on a reference tree and the baseline is recomputed for every
-posterior tree. The returned datasets can be compared descriptively; do
-not pass them to <code>pool_mi()</code>.</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(pigauto)</span>
-<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a><span class="fu">data</span>(avonet300, trees300)</span>
-<span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a>df <span class="ot">&lt;-</span> avonet300</span>
-<span id="cb1-4"><a href="#cb1-4" tabindex="-1"></a><span class="fu">rownames</span>(df) <span class="ot">&lt;-</span> df<span class="sc">$</span>Species_Key</span>
-<span id="cb1-5"><a href="#cb1-5" tabindex="-1"></a>df<span class="sc">$</span>Species_Key <span class="ot">&lt;-</span> <span class="cn">NULL</span></span>
-<span id="cb1-6"><a href="#cb1-6" tabindex="-1"></a></span>
-<span id="cb1-7"><a href="#cb1-7" tabindex="-1"></a>mi <span class="ot">&lt;-</span> <span class="fu">multi_impute_trees</span>(df, <span class="at">trees =</span> trees300, <span class="at">m_per_tree =</span> <span class="dv">1</span><span class="dt">L</span>)</span>
-<span id="cb1-8"><a href="#cb1-8" tabindex="-1"></a><span class="co"># share_gnn = TRUE, reference_tree = MCC via phangorn -- all default</span></span>
-<span id="cb1-9"><a href="#cb1-9" tabindex="-1"></a></span>
-<span id="cb1-10"><a href="#cb1-10" tabindex="-1"></a>mass_by_tree <span class="ot">&lt;-</span> <span class="fu">vapply</span>(mi<span class="sc">$</span>datasets, <span class="cf">function</span>(dat) dat<span class="sc">$</span>Mass, <span class="fu">numeric</span>(<span class="fu">nrow</span>(df)))</span>
-<span id="cb1-11"><a href="#cb1-11" tabindex="-1"></a><span class="fu">apply</span>(mass_by_tree, <span class="dv">1</span><span class="dt">L</span>, stats<span class="sc">::</span>sd)  <span class="co"># descriptive sensitivity, not an MI SE</span></span></code></pre></div>
+<p>The default <code>gnn = FALSE</code> fits no network and recomputes
+the baseline across posterior trees. If you explicitly set
+<code>gnn = TRUE</code>, <code>share_gnn = TRUE</code> (the default)
+trains one GNN on a reference tree and shares it across trees. The
+returned datasets can be compared descriptively; do not pass them to
+<code>pool_mi()</code>.</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="fu">library</span>(pigauto)</span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="fu">data</span>(avonet300, trees300)</span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a>df <span class="ot">&lt;-</span> avonet300</span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a><span class="fu">rownames</span>(df) <span class="ot">&lt;-</span> df<span class="sc">$</span>Species_Key</span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a>df<span class="sc">$</span>Species_Key <span class="ot">&lt;-</span> <span class="cn">NULL</span></span>
+<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a></span>
+<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a>mi <span class="ot">&lt;-</span> <span class="fu">multi_impute_trees</span>(df, <span class="at">trees =</span> trees300, <span class="at">m_per_tree =</span> <span class="dv">1</span><span class="dt">L</span>)</span>
+<span id="cb2-8"><a href="#cb2-8" tabindex="-1"></a><span class="co"># gnn = FALSE by default; the baseline responds to each tree</span></span>
+<span id="cb2-9"><a href="#cb2-9" tabindex="-1"></a></span>
+<span id="cb2-10"><a href="#cb2-10" tabindex="-1"></a>mass_by_tree <span class="ot">&lt;-</span> <span class="fu">vapply</span>(mi<span class="sc">$</span>datasets, <span class="cf">function</span>(dat) dat<span class="sc">$</span>Mass, <span class="fu">numeric</span>(<span class="fu">nrow</span>(df)))</span>
+<span id="cb2-11"><a href="#cb2-11" tabindex="-1"></a><span class="fu">apply</span>(mass_by_tree, <span class="dv">1</span><span class="dt">L</span>, stats<span class="sc">::</span>sd)  <span class="co"># descriptive sensitivity, not an MI SE</span></span></code></pre></div>
 <p>The code above is illustrative and left unevaluated because the tree
 loop is computationally expensive.</p>
 </div>
-<div id="why-share_gnn-true-preserves-tree-signal" class="section level2">
-<h2>Why <code>share_gnn = TRUE</code> preserves tree signal</h2>
-<p>The calibrated gate <code>r_cal</code> controls how much of each
-prediction comes from the baseline vs the GNN. In
-high-phylogenetic-signal regimes the gate often closes or nearly closes,
-so <code>pred = baseline(tree_t)</code> and the per-tree baseline
-carries the tree-uncertainty signal. When the gate is partly open, the
-GNN component is shared across trees and the per-tree baseline still
-varies with <code>tree_t</code>. See <code>?multi_impute_trees</code>
-under “Share-GNN (tree-sharing) mode” for the fully-open and
-partially-open cases.</p>
+<div id="when-the-optional-gnn-is-shared" class="section level2">
+<h2>When the optional GNN is shared</h2>
+<p>With <code>gnn = TRUE, share_gnn = TRUE</code>, the calibrated gate
+<code>r_cal</code> controls how much of each prediction comes from the
+baseline vs the GNN. In high-phylogenetic-signal regimes the gate often
+closes or nearly closes, so <code>pred = baseline(tree_t)</code> and the
+per-tree baseline carries the tree-uncertainty signal. When the gate is
+partly open, the GNN component is shared across trees and the per-tree
+baseline still varies with <code>tree_t</code>. See
+<code>?multi_impute_trees</code> under “Share-GNN (tree-sharing) mode”
+for the fully-open and partially-open cases.</p>
 <p>If you need exact per-tree model independence (e.g. for
 methodological comparison), set <code>share_gnn = FALSE</code>:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>mi_slow <span class="ot">&lt;-</span> <span class="fu">multi_impute_trees</span>(df, trees300, <span class="at">m_per_tree =</span> <span class="dv">1</span><span class="dt">L</span>,</span>
-<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a>                               <span class="at">share_gnn =</span> <span class="cn">FALSE</span>)</span>
-<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a><span class="co"># fits T = length(trees300) full pigauto models -- ~10-15x slower.</span></span></code></pre></div>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a>mi_slow <span class="ot">&lt;-</span> <span class="fu">multi_impute_trees</span>(df, trees300, <span class="at">m_per_tree =</span> <span class="dv">1</span><span class="dt">L</span>,</span>
+<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a>                               <span class="at">gnn =</span> <span class="cn">TRUE</span>, <span class="at">share_gnn =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a><span class="co"># Fits a separate GNN on each tree; runtime depends on tree size and hardware.</span></span></code></pre></div>
 </div>
 <div id="what-this-does-not-establish" class="section level2">
 <h2>What this does not establish</h2>
@@ -400,8 +430,13 @@ backend requires a separate known-DGP campaign.</p>
 <div id="references" class="section level2">
 <h2>References</h2>
 <ul>
+<li>Ericson PG et al. (2006). Diversification of Neoaves: integration of
+molecular sequence data and fossils. <em>Biology Letters</em>
+2(4):543-547. <a href="doi:10.1098/rsbl.2006.0523" class="uri">doi:10.1098/rsbl.2006.0523</a>.</li>
+<li>Hackett SJ et al. (2008). A phylogenomic study of birds reveals
+their evolutionary history. <em>Science</em> 320(5884):1763-1768. <a href="doi:10.1126/science.1157704" class="uri">doi:10.1126/science.1157704</a>.</li>
 <li>Jetz W et al. (2012). The global diversity of birds in space and
-time. <em>Nature</em> 491: 444-448.</li>
+time. <em>Nature</em> 491:444-448. <a href="doi:10.1038/nature11631" class="uri">doi:10.1038/nature11631</a>.</li>
 </ul>
 </div>
 

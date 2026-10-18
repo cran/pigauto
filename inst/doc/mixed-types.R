@@ -45,9 +45,6 @@ dim(bl$mu)
 fit <- fit_pigauto(
   pd, tree,
   splits = spl,
-  epochs = 200L,
-  eval_every = 50L,
-  patience = 5L,
   verbose = FALSE,
   seed = 1
 )

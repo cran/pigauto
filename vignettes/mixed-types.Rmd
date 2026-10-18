@@ -42,6 +42,11 @@ phylogenetic baseline and GNN correction both operate in this space,
 and type-specific logic appears only at encoding, loss computation,
 and decoding.
 
+Before fitting a mixed table, use `check_pigauto(traits, tree)`. Its trait
+table records the detected type, declaration source, usable matched rows, and
+copy-ready corrections; its species report distinguishes matched, data-only,
+and tree-only identities.
+
 ## Synthetic example
 
 ```{r simulate}
@@ -104,18 +109,18 @@ bl <- fit_baseline(pd, tree, splits = spl)
 dim(bl$mu)
 ```
 
-## Training
+## Fitting
 
-`fit_pigauto()` uses type-specific losses and trait-level corruption
-masking automatically when a `trait_map` is present:
+`fit_pigauto()` calibrates the phylogenetic baseline for every trait
+type on the validation cells and computes the conformal intervals. With
+the default `gnn = FALSE` no network is trained. With `gnn = TRUE` it also
+trains the GNN correction, using type-specific losses and trait-level
+corruption masking when a `trait_map` is present.
 
 ```{r train, message = FALSE}
 fit <- fit_pigauto(
   pd, tree,
   splits = spl,
-  epochs = 200L,
-  eval_every = 50L,
-  patience = 5L,
   verbose = FALSE,
   seed = 1
 )
@@ -141,7 +146,9 @@ head(pred$probabilities$migr)
 head(pred$probabilities$diet)
 ```
 
-The SE matrix provides type-appropriate uncertainty:
+The SE matrix provides type-appropriate uncertainty (see the
+uncertainty-mechanisms table in the GNN architecture vignette for what
+each column's SE does and does not guarantee):
 
 ```{r se}
 head(pred$se)
@@ -195,4 +202,8 @@ BLUPs/conditional modes, and latent loadings are unsupported.
 
 For prediction diagnostics, the lower-level
 `predict(fit, n_imputations = 5L)` interface returns stochastic datasets.
-These are not supported for downstream inference.
+These are not supported for downstream inference. The analysis-aware
+`multi_impute_analysis()` route admits its own narrow class of objects
+to `with_imputations()` and `pool_mi()`; the posterior route from
+`multi_impute()` supports the separately documented continuous-trait
+analyses.

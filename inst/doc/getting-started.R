@@ -6,14 +6,40 @@ knitr::opts_chunk$set(
   fig.height = 4
 )
 
+## ----canonical-journey, eval=FALSE--------------------------------------------
+# library(pigauto)
+# 
+# traits <- read_traits("traits.csv")
+# tree <- read_tree("tree.nwk")
+# check_pigauto(traits, tree)
+# result <- impute(traits, tree)
+# completed <- completed_data(result)
+# pigauto_report(result)
+
+## ----declarations, eval=FALSE-------------------------------------------------
+# # Ordered ecological states
+# traits$threat <- ordered(traits$threat, levels = c("LC", "NT", "VU", "EN", "CR"))
+# 
+# # Integer-valued continuous measurement; integer otherwise means count
+# result <- impute(traits, tree, trait_types = c(length_mm = "continuous"))
+# 
+# # Numeric 0-1 proportion and zero-inflated count require explicit declarations
+# result <- impute(traits, tree, trait_types = c(cover = "proportion", parasites = "zi_count"))
+# 
+# # A composition is complete by row and its observed components sum to one
+# result <- impute(traits, tree,
+#   multi_proportion_groups = list(diet = c("diet_insect", "diet_fruit", "diet_seed")))
+
 ## ----install, eval=FALSE------------------------------------------------------
 # # CRAN release
 # install.packages("pigauto")
+# packageVersion("pigauto")
 # 
-# # Development version
+# # GitHub version, if CRAN has an earlier version
+# # install.packages("pak") # once, if needed
 # pak::pak("itchyshin/pigauto")
 # 
-# # torch backend (required; ~1 GB first-time download)
+# # Install the torch runtime only if you plan to use gnn = TRUE
 # torch::install_torch()
 
 ## ----load---------------------------------------------------------------------
@@ -83,7 +109,8 @@ cat("Kernel bandwidth sigma:", round(graph$sigma, 3), "\n")
 #   eval_every      = 100,
 #   patience        = 10,
 #   verbose         = TRUE,
-#   seed            = 1
+#   seed            = 1,
+#   gnn             = TRUE
 # )
 
 ## ----print-fit, eval=FALSE----------------------------------------------------
@@ -92,27 +119,23 @@ cat("Kernel bandwidth sigma:", round(graph$sigma, 3), "\n")
 ## ----predict, eval=FALSE------------------------------------------------------
 # pred <- predict(fit, return_se = TRUE)
 # 
-# # pred$imputed: 300 x 4 matrix in original units
-# # pred$se:      300 x 4 uncertainty matrix (original units)
+# # pred$imputed: 300-row data.frame with the 7 original trait columns
+# # pred$imputed_latent: 300 x 14 matrix on the latent scale
+# # pred$se: 300 x 7 per-trait uncertainty matrix
 # head(pred$imputed)
 # 
-# # Conformal prediction intervals (95% marginal coverage guarantee)
-# pred$conformal_lower[["Mass"]]    # lower bound per species (original units)
-# pred$conformal_upper[["Mass"]]    # upper bound per species (original units)
-# pred$conformal_coverage           # empirical coverage on val set (target ≈ 0.95)
+# # Conformal prediction intervals (nominal held-out diagnostic)
+# pred$conformal_lower[, "Mass"]    # lower bound per species (original units)
+# pred$conformal_upper[, "Mass"]    # upper bound per species (original units)
+# # Coverage is not stored on the prediction object. Score it with evaluate()
+# # (or evaluate_imputation() on held-out cells).
 
 ## ----evaluate, eval=FALSE-----------------------------------------------------
-# # BM baseline RMSE on test cells
-# eval_bm <- evaluate_imputation(baseline$mu, pd$X_scaled, splits)
-# eval_bm[eval_bm$split == "test", c("trait", "n", "rmse", "pearson_r")]
-
-## ----compare, eval=FALSE------------------------------------------------------
-# # GNN test RMSE stored in fit object
-# data.frame(
-#   trait    = fit$trait_names,
-#   bm_rmse  = eval_bm$rmse[eval_bm$split == "test"],
-#   gnn_rmse = fit$test_rmse
-# )
+# # Held-out scores (z-score RMSE for continuous traits)
+# evaluate_imputation(pred$imputed_latent, pd$X_scaled, splits)
+# 
+# # Per-trait calibrated gate. 0 means baseline-only.
+# fit$r_cal
 
 ## ----plot-history, eval=FALSE-------------------------------------------------
 # plot(fit, type = "history")
@@ -147,9 +170,21 @@ cat("Kernel bandwidth sigma:", round(graph$sigma, 3), "\n")
 # # species' currently-missing continuous-family traits):
 # suggest_next_observation(res, top_n = 10, by = "species")
 
+## ----advanced-controls, eval=FALSE--------------------------------------------
+# result <- impute(
+#   traits, tree,
+#   joint_solver = "rphylopars",
+#   em_iterations = 2L,
+#   joint_refine_iter = 1L,
+#   conformal_split_val = TRUE
+# )
+
+## ----exact-route, eval=FALSE--------------------------------------------------
+# result <- impute(traits, tree, predict_method = "exact")
+
 ## ----phylo-signal-gate, eval=FALSE--------------------------------------------
 # result <- impute(traits, tree,
-#                  phylo_signal_gate     = TRUE,   # default
+#                  phylo_signal_gate     = TRUE,   # opt-in (default FALSE)
 #                  phylo_signal_threshold = 0.2,   # default; min lambda to keep BM/GNN
 #                  phylo_signal_method   = "lambda")
 
@@ -172,7 +207,7 @@ cat("Kernel bandwidth sigma:", round(graph$sigma, 3), "\n")
 # #> data.frame with bio1..bio19 medians + IQRs + n_extracted per species
 # 
 # # Step 3: hand the whole climate frame to impute() as covariates
-# result <- impute(my_traits, my_tree, covariates = clim)
+# result <- impute(my_traits, my_tree, covariates = clim, gnn = TRUE)
 
 ## ----gpu, eval=FALSE----------------------------------------------------------
 # torch::cuda_is_available()       # NVIDIA GPU

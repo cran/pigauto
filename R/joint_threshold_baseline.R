@@ -58,14 +58,29 @@ aggregate_to_species <- function(data, splits = NULL, soft_aggregate = FALSE) {
 
   is_proportion_col <- rep(FALSE, ncol(X))
 
+  if (length(obs_to_sp) != nrow(X)) {
+    if (!is.null(data$obs_species) && length(data$obs_species) == nrow(X)) {
+      obs_to_sp <- match(data$obs_species, spp)
+    } else {
+      obs_to_sp <- match(rownames(X), spp)
+    }
+  }
+  obs_to_sp <- as.integer(obs_to_sp)
+  if (length(obs_to_sp) != nrow(X)) {
+    stop("Observation-to-species index length (", length(obs_to_sp),
+         ") does not match latent rows (", nrow(X), ").", call. = FALSE)
+  }
+
   for (j in seq_len(ncol(X))) {
     tp <- type_by_col[j]
-    sp_vals <- tapply(X[, j], obs_to_sp, function(v) {
+    # Mean by species without tapply(): NA groups and length mismatches
+    # previously died with "arguments must have same length" (#205).
+    sp_vals <- rep(NA_real_, n_species)
+    for (s in seq_len(n_species)) {
+      v <- X[which(obs_to_sp == s), j]
       v <- v[!is.na(v)]
-      if (length(v) == 0L) NA_real_ else mean(v)
-    })
-    # Reorder to spp order via integer index
-    sp_vals <- sp_vals[as.character(seq_len(n_species))]
+      if (length(v)) sp_vals[s] <- mean(v)
+    }
     if (tp == "binary") {
       if (soft_aggregate) {
         X_species[, j] <- unname(sp_vals)  # keep proportion
@@ -270,20 +285,50 @@ build_liability_matrix <- function(data, splits = NULL, soft_aggregate = FALSE,
 
 #' Fit a joint MVN BM on liability-scale columns (Phase 3)
 #'
-#' Runs `build_liability_matrix()` then fits the joint Sigma via the
-#' in-house `fit_mvn_bm_inhouse()` solver (R/joint_mvn_solver.R).
+#' Runs `build_liability_matrix()` then fits the joint Sigma via
+#' `fit_joint_solver()` (R/joint_mvn_solver.R; in-house by default, or
+#' Rphylopars when `joint_solver = "rphylopars"`).
 #' Returns raw liability-scale posterior. Decoding to per-type output scale
 #' happens upstream in the caller / in `fit_baseline()` glue.
 #'
 #' @inheritParams fit_joint_mvn_baseline
-#' @return list(mu_liab, se_liab, liab_cols, liab_types).
+#' @param joint_solver character, `"inhouse"` (default) or `"rphylopars"`.
+#'   See `fit_joint_solver()` in R/joint_mvn_solver.R.
+#' @param joint_refine_iter integer, default `0L`. See `fit_joint_solver()`
+#'   in R/joint_mvn_solver.R.
+#' @param lambda_mode character, `"fixed_1"` (default) or `"estimate"`.
+#'   S4: continuous-family columns of `liab_types` (continuous, count,
+#'   proportion -- NOT ordinal, which enters this matrix as a liability
+#'   posterior via `estep_liability_ordinal()`, not the z-scored numeric,
+#'   and NOT binary) get their own Pagel's lambda under `"estimate"` via
+#'   `fit_joint_solver()`'s `lambda_cols`. Binary and ordinal liability
+#'   columns always stay at lambda = 1 (section 7 B iii cut). `"cv"` /
+#'   `"bayes"` have no joint analogue; callers must translate those to
+#'   `"fixed_1"` before calling this function (see `fit_baseline.R`).
+#' @param lambda_fixed optional named numeric vector (names = latent column
+#'   names) giving a fixed lambda per continuous-family column, overriding
+#'   `lambda_mode` entirely (spec 4.5 predict-time rebuild).
+#' @return list(mu_liab, se_liab, liab_cols, liab_types, lambda_per_trait_fit,
+#'   lambda_block); `lambda_per_trait_fit` is named by `colnames(X_fit)`
+#'   (i.e. `colnames(X_liab)[fit_cols]`), NULL when no fit ran.
 #' @keywords internal
 #' @noRd
 fit_joint_threshold_baseline <- function(data, tree, splits, graph = NULL,
                                         soft_aggregate = FALSE,
                                         sd_prior_vec = NULL,
                                         mu_prior_mat = NULL,
-                                        sd_prior_mat = NULL) {
+                                        sd_prior_mat = NULL,
+                                        joint_solver = "inhouse",
+                       predict_method = "exact",
+                                        joint_refine_iter = 0L,
+                                        lambda_mode = "fixed_1",
+                                        lambda_fixed = NULL,
+                                        predict_method_explicit = NULL,
+                                        discrete_lambda = "estimate") {
+  if (is.null(predict_method_explicit)) {
+    predict_method_explicit <- !missing(predict_method)
+  }
+  discrete_lambda <- match.arg(discrete_lambda, c("estimate", "fixed_1"))
   stopifnot(joint_mvn_available())
 
   built <- build_liability_matrix(data, splits = splits,
@@ -310,15 +355,75 @@ fit_joint_threshold_baseline <- function(data, tree, splits, graph = NULL,
                         dimnames = list(spp, colnames(X_liab)))
 
   phylopars_fit <- NULL
+  lambda_per_trait_fit <- NULL
+  lambda_block <- NA_real_
   if (length(fit_cols) >= 1L) {
     X_fit <- X_liab[, fit_cols, drop = FALSE]
     rownames(X_fit) <- spp
 
-    # In-house solver: matrix-normal BM ML estimate on the liability
-    # matrix. No external dependency (no Rphylopars). Output contract
-    # matches phylopars' $anc_recon / $anc_var / $pars$phylocov on the
-    # fields pigauto consumes.
-    fit <- fit_mvn_bm_inhouse(L = X_fit, tree = tree)
+    # S4: which of X_fit's OWN columns (not the full liab_cols space) are
+    # continuous-family and therefore eligible for their own lambda_k.
+    # liab_types[fit_cols] is aligned with X_fit's columns 1:length(fit_cols).
+    lambda_family_idx <- which(liab_types[fit_cols] %in%
+                                  c("continuous", "count", "proportion"))
+    # discrete_lambda = "estimate" (default) also estimates Pagel's lambda on
+    # the binary / ordinal liability columns (and the synthetic one-vs-rest
+    # binary column of each categorical trait). Under the threshold model the
+    # liability evolves under lambda, so a weak-signal trait shrinks toward
+    # its overall prevalence rather than copying close relatives.
+    # "fixed_1" holds them at lambda = 1 (the section 7 B iii cut of D-278,
+    # the behaviour before this argument existed).
+    discrete_idx <- if (identical(discrete_lambda, "estimate")) {
+      which(liab_types[fit_cols] %in% c("binary", "ordinal"))
+    } else {
+      integer(0)
+    }
+    if (!is.null(lambda_fixed)) {
+      # Columns missing from `lambda_fixed` default to lambda = 1, per the
+      # documented contract on `fit_baseline()`'s `lambda_fixed` argument
+      # (Rose review, 2026-09-23: this used to leave those entries NA and
+      # error downstream instead of defaulting to 1). S4 fix (root cause
+      # A, docs/dev-log/exact-default/S4-fixes-report.md): look up EVERY
+      # X_fit column by name (not just the continuous-family
+      # `lambda_family_idx` subset) -- under predict_method = "exact",
+      # discrete liability columns can legitimately carry lambda_block
+      # (not 1) in a previous fit's own $lambda_per_trait (see
+      # .mvn_resolve_lambda()'s exact-route exception), and forcing them
+      # back to 1 here would desynchronise a lambda_fixed rebuild from the
+      # fit it was replaying. A discrete column simply absent from
+      # `lambda_fixed` (the common case for a hand-built or partial
+      # vector) still defaults to 1, unchanged.
+      lam_vals <- unname(lambda_fixed[colnames(X_fit)])
+      lam_vals[is.na(lam_vals)] <- 1.0
+      lam_arg <- lam_vals
+      # Carry the original fit's lambda_block through the name-subset,
+      # which drops custom attributes -- see R/joint_mvn_solver.R's
+      # .mvn_resolve_lambda() numeric-vector branch.
+      lb_fixed <- attr(lambda_fixed, "lambda_block")
+      if (!is.null(lb_fixed) && is.finite(lb_fixed)) {
+        attr(lam_arg, "lambda_block") <- lb_fixed
+      }
+      lam_cols_arg <- NULL   # full vector supplied; lambda_cols unused
+    } else if (identical(lambda_mode, "estimate") || length(discrete_idx)) {
+      lam_arg <- "estimate"
+      lam_cols_arg <- sort(unique(c(
+        if (identical(lambda_mode, "estimate")) lambda_family_idx,
+        discrete_idx)))
+    } else {
+      lam_arg <- "fixed_1"
+      lam_cols_arg <- NULL
+    }
+
+    # Dispatch to the in-house solver (default; no external dependency) or
+    # to Rphylopars when joint_solver = "rphylopars" (with fallback to
+    # in-house on failure). Output contract matches phylopars'
+    # $anc_recon / $anc_var / $pars$phylocov on the fields pigauto
+    # consumes -- the in-house solver was built to match it.
+    fit <- fit_joint_solver(L = X_fit, tree = tree, joint_solver = joint_solver,
+                            predict_method = predict_method,
+                            joint_refine_iter = joint_refine_iter,
+                            lambda = lam_arg, lambda_cols = lam_cols_arg,
+                            predict_method_explicit = predict_method_explicit)
 
     tip_rows <- match(spp, rownames(fit$anc_recon))
     mu_fit   <- fit$anc_recon[tip_rows, , drop = FALSE]
@@ -335,6 +440,18 @@ fit_joint_threshold_baseline <- function(data, tree, splits, graph = NULL,
     mu_liab[, fit_cols] <- mu_fit
     se_liab[, fit_cols] <- se_fit
     phylopars_fit <- fit
+    if (!is.null(fit$lambda_per_trait)) {
+      # fit$lambda_per_trait is a scalar NA_real_ on the rphylopars path
+      # (fit_joint_solver() does not read phylopars' own lambda back in
+      # this slice); broadcast to length(fit_cols) so every X_fit column
+      # gets one entry, honestly reporting "not tracked" as NA.
+      lambda_per_trait_fit <- fit$lambda_per_trait
+      if (length(lambda_per_trait_fit) != ncol(X_fit)) {
+        lambda_per_trait_fit <- rep(lambda_per_trait_fit[1], ncol(X_fit))
+      }
+      names(lambda_per_trait_fit) <- colnames(X_fit)
+    }
+    if (!is.null(fit$lambda_block)) lambda_block <- fit$lambda_block
   }
 
   # phylopars_fit and fit_cols_idx are additive fields used by Phase 6 EM to
@@ -345,7 +462,14 @@ fit_joint_threshold_baseline <- function(data, tree, splits, graph = NULL,
        liab_cols    = liab_cols,
        liab_types   = liab_types,
        phylopars_fit = phylopars_fit,
-       fit_cols_idx = fit_cols)
+       fit_cols_idx = fit_cols,
+       lambda_per_trait_fit = lambda_per_trait_fit,
+       lambda_block = lambda_block,
+       predict_method_used = if (!is.null(phylopars_fit)) {
+         phylopars_fit$predict_method_used %||% NA_character_
+       } else {
+         NA_character_
+       })
 }
 
 #' Decode liability-scale posterior to logit(P(y=1)) for binary traits
@@ -518,7 +642,17 @@ fit_joint_threshold_baseline_em <- function(data, tree, splits,
                                              soft_aggregate = FALSE,
                                              em_iterations = 5L,
                                              em_tol = 1e-3,
-                                             em_offdiag = FALSE) {
+                                             em_offdiag = FALSE,
+                                             joint_solver = "inhouse",
+                                          predict_method = "exact",
+                                             joint_refine_iter = 0L,
+                                             lambda_mode = "fixed_1",
+                                             lambda_fixed = NULL,
+                                             predict_method_explicit = NULL,
+                                             discrete_lambda = "estimate") {
+  if (is.null(predict_method_explicit)) {
+    predict_method_explicit <- !missing(predict_method)
+  }
   stopifnot(joint_mvn_available(), em_iterations >= 1L)
 
   # Phase 6 state (diagonal):
@@ -541,7 +675,14 @@ fit_joint_threshold_baseline_em <- function(data, tree, splits,
                                     soft_aggregate = soft_aggregate,
                                     sd_prior_vec = sd_prior_vec,
                                     mu_prior_mat = mu_prior_mat,
-                                    sd_prior_mat = sd_prior_mat),
+                                    sd_prior_mat = sd_prior_mat,
+                                    joint_solver = joint_solver,
+                                    predict_method = predict_method,
+                                    joint_refine_iter = joint_refine_iter,
+                                    lambda_mode = lambda_mode,
+                                    lambda_fixed = lambda_fixed,
+                                    predict_method_explicit = predict_method_explicit,
+                                    discrete_lambda = discrete_lambda),
       error = function(e) NULL
     )
 

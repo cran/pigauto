@@ -19,7 +19,11 @@ adapters are provided for \code{\link[stats:lm]{stats::lm}}, \code{\link[stats:g
 \code{nlme::lme}, \code{lme4::merMod}, \code{glmmTMB::glmmTMB}, \code{drmTMB}, and
 \code{gllvmTMB_multi} fits. Other classes implementing \code{coef()} and \code{vcov()}
 also work. The output of \code{\link[=with_imputations]{with_imputations()}} is accepted directly.
-\code{MCMCglmm} fits are rejected -- see Details.}
+Bayesian fits (\code{brms}, \code{MCMCglmm}) are rejected; see Details.
+Bare user-supplied fit lists are accepted with an explicit warning because
+their imputation provenance cannot be verified.
+pigauto workflow classes and markers are caller-controlled metadata; they
+do not authenticate the fits or their history.}
 
 \item{conf.level}{Confidence level for the pooled interval (default
 \code{0.95}).}
@@ -27,7 +31,10 @@ also work. The output of \code{\link[=with_imputations]{with_imputations()}} is 
 \item{coef_fun}{Optional function extracting a named numeric fixed-effect
 vector from one fit. \code{NULL} uses the automatic class adapter. Custom
 coefficient and covariance extractors can be supplied independently;
-callers must ensure custom extractors select fixed effects only.}
+callers must ensure custom extractors select fixed effects only.
+For recognized \code{drmTMB} and \code{gllvmTMB_multi} fits, pigauto still requires
+convergence code zero and a positive-definite Hessian, even when a custom
+extractor is supplied.}
 
 \item{vcov_fun}{Optional function extracting the fixed-effect covariance
 matrix. \code{NULL} uses the automatic class adapter. Base matrices and
@@ -68,7 +75,10 @@ dataset -- into a single pooled table using Rubin's rules. The pooled
 standard errors combine within-imputation sampling variance and
 between-imputation variance. Correct Rubin arithmetic does not make an
 incompatible imputation model inferentially valid. For pigauto inference,
-fits should come from the documented \code{\link[=multi_impute_analysis]{multi_impute_analysis()}} workflow.
+fits should come from the documented \code{\link[=multi_impute_analysis]{multi_impute_analysis()}} workflow,
+or, for continuous traits, from \code{\link[=multi_impute]{multi_impute()}} with
+\code{draws_method = "posterior"} (see \code{\link[=with_imputations]{with_imputations()}} for the analyses
+those draws cover), via \code{\link[=with_imputations]{with_imputations()}}.
 The backend is experimental and supports fixed-effect coefficients only. Variance
 components, correlations, random-effect predictions, BLUPs/conditional
 modes, latent loadings, and other structured parameters are unsupported.
@@ -97,7 +107,7 @@ supplied, Barnard--Rubin instead retains finite observed-data df and its
 small-sample FMI adjustment. A completely deterministic quantity
 (\code{B = W = 0}) always has zero FMI and infinite df.
 
-Only fixed-effect coefficients are pooled in version 0.10.0. Random-effect
+Only fixed-effect coefficients are pooled. Random-effect
 variances and correlations, BLUPs/conditional modes, latent loadings, and
 other structured parameters require parameter-specific transformations and
 are not supported by the automatic \code{pool_mi()} adapters. Custom extractors
@@ -106,12 +116,25 @@ select unsupported structured parameters is outside the documented scope.
 The \code{glmmTMB} adapter selects conditional fixed effects only. The \code{drmTMB}
 adapter includes named distributional fixed-effect blocks such as regression
 coefficients for \code{mu} and \code{sigma}; those are fixed coefficients, not
-random-effect variance components.
+random-effect variance components. \code{drmTMB} and \code{gllvmTMB} need to be
+installed and loadable only when their automatic adapters are used.
+For either recognized backend class, pooling also requires the fit to report
+scalar convergence code \code{0} and \code{pdHess = TRUE}; missing or invalid status
+is rejected before coefficient extraction, including with custom extractors.
 
-\strong{MCMCglmm fits} are rejected because Rubin's rules are not the right
-tool for posterior samples: variance decomposition does not generalise
-cleanly to posterior distributions. No MCMCglmm downstream workflow is
-supported by the initial analysis-aware backend.
+\strong{Supported classes.} \code{lm}, \code{glm}, \code{gls}, \code{lme}, \code{merMod} (lme4),
+\code{glmmTMB} (conditional component), \code{drmTMB}, and \code{gllvmTMB_multi} are
+handled automatically. Other classes are pooled through their
+\code{coef()} / \code{vcov()} methods, or through \code{coef_fun} / \code{vcov_fun} /
+\code{tidy_fun}.
+
+\strong{Bayesian fits (brms, MCMCglmm) are rejected} because Rubin's rules are
+not the right tool for posterior samples: they are pooled by concatenating
+posterior draws across imputations. For brms, use
+\code{brms::brm_multiple(formula, data = mi$datasets)}, or
+\code{brms::combine_models()} on a list of existing fits. For MCMCglmm,
+concatenate the \code{Sol} samples across fits. No Bayesian downstream
+workflow is supported by the analysis-aware backend.
 }
 \examples{
 \donttest{

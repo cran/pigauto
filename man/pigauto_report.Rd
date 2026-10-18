@@ -2,7 +2,7 @@
 % Please edit documentation in R/report.R
 \name{pigauto_report}
 \alias{pigauto_report}
-\title{Generate an HTML benchmark report from a pigauto fit}
+\title{Generate an HTML imputation report from a pigauto fit}
 \usage{
 pigauto_report(
   fit,
@@ -18,26 +18,31 @@ pigauto_report(
 \code{\link{impute}}).}
 
 \item{data}{Optional \code{pigauto_data} object.  Extracted automatically
-when \code{fit} is a \code{pigauto_result}.}
+when \code{fit} is a \code{pigauto_result}.  When supplied it must match
+the fit (species and traits).}
 
-\item{splits}{Optional splits object.  Extracted automatically when
-\code{fit} is a \code{pigauto_result}.}
+\item{splits}{Optional splits object from \code{\link{make_missing_splits}}.
+Extracted automatically when \code{fit} is a \code{pigauto_result}.
+When supplied it must match the fit.}
 
-\item{output_path}{Character.  File path for the HTML report (default
-\code{"pigauto_report.html"} in the working directory).}
+\item{output_path}{Character of length 1.  File path for the HTML report
+(default \code{"pigauto_report.html"} in the working directory).}
 
-\item{title}{Character.  Report title.}
+\item{title}{Character of length 1.  Report title (HTML-escaped on write).}
 
-\item{open}{Logical.  Open the report in a browser when done (default
-\code{TRUE}).}
+\item{open}{Logical of length 1.  Open the report in a browser when done
+(default \code{TRUE}).}
 }
 \value{
 The output path (invisibly).
 }
 \description{
-Produces a self-contained HTML file with interactive charts comparing the
-GNN against the phylogenetic baseline.  The report includes per-trait
-metrics, gate values, conformal coverage, and training history.
+Produces an HTML file with interactive charts (loading Chart.js from its
+public CDN). For fits created with the default \code{gnn = FALSE}, the
+report describes baseline-only imputation. For fits created with
+\code{gnn = TRUE}, it also compares the GNN against the phylogenetic
+baseline and includes training history. Per-trait metrics, gate values,
+and held-out diagnostic conformal coverage are included when available.
 }
 \examples{
 \donttest{

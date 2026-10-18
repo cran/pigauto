@@ -19,6 +19,8 @@ multi_impute_trees(
   seed = NULL,
   share_gnn = TRUE,
   reference_tree = NULL,
+  draws_method = c("mc_dropout", "conformal"),
+  gnn = FALSE,
   ...
 )
 }
@@ -43,8 +45,18 @@ trait types. Required for \code{"proportion"} and \code{"zi_count"}. See
 trait groups (rows summing to 1), forwarded to \code{\link[=impute]{impute()}} /
 \code{\link[=preprocess_traits]{preprocess_traits()}}. Default \code{NULL}.}
 
-\item{log_transform}{logical. Auto-log positive continuous columns
-(default \code{TRUE}).}
+\item{log_transform}{logical. Log-transform every continuous trait whose
+observed values are all positive
+(default \code{TRUE}), then back-transform the imputations. Set it to
+\code{FALSE} when traits are already on a log scale (for example log body
+mass): otherwise they are logged a second time and imputed on a
+log(log) scale, which can bias analyses done on the log scale. With a
+mix of raw and already-logged traits, log the raw ones yourself and set
+\code{FALSE}. In a real-data check (PanTHERIA, 4,027 mammal species, four
+already-logged traits, posterior draws), the default shifted
+Rubin-pooled regression slopes by up to 3.9 standard errors of the
+complete-data slope, in a direction that depended on which values were
+missing; with \code{FALSE} the largest shift was 1.8.}
 
 \item{missing_frac}{numeric. Fraction held out for validation/test
 during training (default \code{0.25}).}
@@ -62,17 +74,31 @@ Default \code{NULL} (no covariates).}
 uses \code{seed + t - 1} for reproducible results. The default \code{NULL} uses
 the current RNG stream.}
 
-\item{share_gnn}{logical. If \code{TRUE} (default), fit the GNN once on a
-reference tree and reuse it across all posterior trees, recomputing
-only the BM baseline per tree. Gives a ~10-15x speedup at n=10k.
-See the "Share-GNN" section below for tree-uncertainty propagation
-details. Set \code{FALSE} to fit from scratch on every tree (the pre-v0.9.1
-behaviour) when you need exact tree-by-tree model independence.}
+\item{share_gnn}{logical. With \code{gnn = TRUE}, \code{TRUE} (the default) trains
+one GNN on a reference tree and reuses it while recomputing the
+baseline for each posterior tree. Set \code{FALSE} to refit the GNN on each
+tree. With the default \code{gnn = FALSE}, no GNN is trained in either mode.
+See the "Share-GNN" section below.}
 
-\item{reference_tree}{optional \code{phylo} used as the training tree when
+\item{reference_tree}{optional \code{phylo} used for the reference fit when
 \code{share_gnn = TRUE}. Default \code{NULL} selects the maximum-clade-credibility
 tree via \code{phangorn::maxCladeCred(trees)}. If \code{phangorn} is not
 installed, falls back to \code{trees[[1]]} with a warning.}
+
+\item{draws_method}{character. How the \code{m_per_tree} stochastic draws are
+generated for each tree (P1-11). One of \code{"mc_dropout"} (default, back
+compatible with pre-P1-11 behaviour) or \code{"conformal"}. See the "Which
+draw mechanism this uses" section below for the trade-off between the
+two.}
+
+\item{gnn}{logical. Passed through to \code{\link[=impute]{impute()}} / \code{\link[=fit_pigauto]{fit_pigauto()}} for
+every tree. When \code{TRUE}, the usual GNN correction is trained
+(once, on the reference tree, when \code{share_gnn = TRUE}). When \code{FALSE},
+no GNN is used anywhere in the pipeline: baseline-only fits
+throughout (the default since 0.11.0.9001; see \code{\link[=impute]{impute()}}). With
+\code{share_gnn = TRUE}, each tree's baseline is fit without held-out
+splits (\code{splits = NULL}), matching the production
+\code{baseline_full} semantics \code{\link[=fit_pigauto]{fit_pigauto()}} uses.}
 
 \item{...}{additional arguments forwarded to \code{\link[=fit_pigauto]{fit_pigauto()}} via
 \code{\link[=impute]{impute()}}.}
@@ -95,11 +121,16 @@ the tree index (1..T) for dataset \code{i}.}
 \item{\code{imputed_mask}}{Logical matrix; \code{TRUE} where a cell was
 originally missing.}
 \item{\code{share_gnn}}{Logical; \code{TRUE} if the shared-GNN path was used.}
-\item{\code{fit}}{Single \code{pigauto_fit} trained on the reference
+\item{\code{draws_method}}{Character; \code{"mc_dropout"} or \code{"conformal"},
+echoing the argument this call used (P1-11).}
+\item{\code{mi_workflow}}{\code{"pigauto_tree_sensitivity_diagnostic"},
+recording that these are prediction-sensitivity completions and
+cannot be passed to \code{\link[=with_imputations]{with_imputations()}} or \code{\link[=pool_mi]{pool_mi()}}.}
+\item{\code{fit}}{Single \code{pigauto_fit} fitted on the reference
 tree when \code{share_gnn = TRUE}; \code{NULL} otherwise.}
 \item{\code{fits}}{List of \code{T} \code{pigauto_fit} objects (one per tree)
 when \code{share_gnn = FALSE}; \code{NULL} when \code{share_gnn = TRUE}.}
-\item{\code{reference_tree}}{The reference \code{phylo} used for GNN training
+\item{\code{reference_tree}}{The reference \code{phylo} used for the shared fit
 when \code{share_gnn = TRUE}; \code{NULL} otherwise.}
 \item{\code{trees}}{The input posterior trees.}
 \item{\code{species_col}}{Passed-through species column name.}
@@ -123,21 +154,21 @@ between-tree variation enters the returned stochastic completions. This
 path is not supported by \code{\link[=multi_impute_analysis]{multi_impute_analysis()}} and has not passed the
 analysis-aware inferential gate. Do not use it for downstream inference.
 
-For each tree the function runs the full pigauto pipeline
-(preprocess -> baseline -> GNN -> predict) when \code{share_gnn = FALSE}.
-With the default \code{share_gnn = TRUE}, the GNN is trained once and only
-the baseline is recomputed per tree. Topologies and branch lengths vary
-across trees, so the phylogenetic baseline covariance differs for each
+For each tree the function runs preprocessing, baseline fitting and
+prediction. A GNN is also fitted only when \code{gnn = TRUE}; with
+\code{share_gnn = TRUE}, that GNN is trained once on a reference tree.
+Topologies and branch lengths vary across trees, so the phylogenetic
+baseline covariance differs for each
 tree.
 
 The returned datasets may be compared descriptively to assess sensitivity
 of point imputations to the tree sample. No calibrated downstream standard
 error or Rubin-pooling claim is made for this path.
 
-\strong{Computation time.} With \code{share_gnn = TRUE} (default): one GNN fit
-\itemize{
-\item T cheap baseline passes. Rough budget on a modern CPU laptop:
-}
+\strong{Computation time.} The following historical planning estimates apply
+to \code{gnn = TRUE}, with one shared GNN fit plus T baseline passes when
+\code{share_gnn = TRUE}. They are not timings for the current GNN-off default;
+estimate the intended tree and sample setting before a campaign.
 
 \tabular{rrrr}{
 Species n \tab 1 fit \tab T = 50 share_gnn=TRUE \tab T = 50 share_gnn=FALSE \cr
@@ -162,8 +193,8 @@ uncertainty is unsupported by the analysis-aware backend.
 \section{Share-GNN (tree-sharing) mode}{
 
 
-Under \code{share_gnn = TRUE} the GNN weights and spectral features are
-trained once on the reference tree (MCC by default). For each
+When \verb{gnn = TRUE, share_gnn = TRUE}, the GNN weights and spectral features
+are trained once on the reference tree (MCC by default). For each
 posterior tree the BM / joint-MVN baseline is recomputed, and the
 prediction is the blend \code{(1 - r_cal) * baseline_t + r_cal * gnn_shared}.
 Because \code{r_cal} is calibrated once on held-out data at the reference
@@ -181,7 +212,35 @@ data; the baseline channel still carries tree variation).
 On every real dataset benchmarked in the v0.9.0 campaign the gate
 closed partially or fully. This evidence is specific to those benchmark
 regimes and does not guarantee tree-variance calibration elsewhere.
-Set \code{share_gnn = FALSE} if you need exact per-tree model independence.
+Set \code{share_gnn = FALSE} with \code{gnn = TRUE} if you need a separate GNN fit
+for each tree. With the default \code{gnn = FALSE}, there is no GNN channel.
+}
+
+\section{Which draw mechanism this uses (and its limitation)}{
+
+The default \code{draws_method = "mc_dropout"} passes
+\code{n_imputations = m_per_tree} to \code{\link[=impute]{impute()}}. With \code{gnn = TRUE}, each draw
+combines a fresh baseline draw with a stochastic GNN pass. With the
+default \code{gnn = FALSE}, no GNN or dropout runs; only the baseline draw
+varies within each tree.
+
+This differs from the conformal option in \code{\link[=multi_impute]{multi_impute()}}. That
+function now defaults to \code{draws_method = "auto"}, selecting posterior
+draws for eligible continuous-trait inputs and conformal draws otherwise.
+Baseline and optional GNN draws reflect model and prior uncertainty,
+whereas conformal draws use held-out prediction residuals. Neither mechanism
+validates downstream pooling or inference for posterior-tree completions.
+
+\code{multi_impute_trees()} now exposes a \code{draws_method} argument
+(P1-11). \code{draws_method = "conformal"} runs \code{\link{impute}} with
+\code{n_imputations = 1} on each tree and draws the \code{m_per_tree}
+completions from the calibrated conformal scores instead, via the same
+internal sampling helper \code{multi_impute()} uses. Default remains
+\code{"mc_dropout"} for back compatibility. Within-tree calibration
+changes the within-tree stochastic completion mechanism; both settings are
+prediction-sensitivity diagnostics. Between-tree variation is present under
+either setting because the baseline (and, when \code{share_gnn = FALSE},
+the GNN) still varies per tree.
 }
 
 \section{Safety floor + share_gnn (v0.9.1.9002+)}{
@@ -227,6 +286,7 @@ global diversity of birds in space and time." \emph{Nature}
 491(7424): 444-448.
 }
 \seealso{
-\code{\link[=multi_impute]{multi_impute()}} for single-tree prediction diagnostics,
-\code{\link[=multi_impute_analysis]{multi_impute_analysis()}} for analysis-aware MI, and \link{trees300}
+\code{\link[=multi_impute]{multi_impute()}} for single-tree prediction diagnostics or,
+with \code{draws_method = "posterior"}, single-tree inference on continuous
+traits; \code{\link[=multi_impute_analysis]{multi_impute_analysis()}} for analysis-aware MI; and \link{trees300}
 }

@@ -67,8 +67,18 @@ resolve_reference_tree <- function(trees, reference_tree = NULL) {
 #' @param multi_proportion_groups named list declaring compositional
 #'   trait groups (rows summing to 1), forwarded to [impute()] /
 #'   [preprocess_traits()]. Default `NULL`.
-#' @param log_transform logical. Auto-log positive continuous columns
-#'   (default `TRUE`).
+#' @param log_transform logical. Log-transform every continuous trait whose
+#'   observed values are all positive
+#'   (default `TRUE`), then back-transform the imputations. Set it to
+#'   `FALSE` when traits are already on a log scale (for example log body
+#'   mass): otherwise they are logged a second time and imputed on a
+#'   log(log) scale, which can bias analyses done on the log scale. With a
+#'   mix of raw and already-logged traits, log the raw ones yourself and set
+#'   `FALSE`. In a real-data check (PanTHERIA, 4,027 mammal species, four
+#'   already-logged traits, posterior draws), the default shifted
+#'   Rubin-pooled regression slopes by up to 3.9 standard errors of the
+#'   complete-data slope, in a direction that depended on which values were
+#'   missing; with `FALSE` the largest shift was 1.8.
 #' @param missing_frac numeric. Fraction held out for validation/test
 #'   during training (default `0.25`).
 #' @param covariates data.frame or matrix of environmental covariates
@@ -80,16 +90,28 @@ resolve_reference_tree <- function(trees, reference_tree = NULL) {
 #' @param seed optional integer. Base random seed; when supplied, each tree
 #'   uses `seed + t - 1` for reproducible results. The default `NULL` uses
 #'   the current RNG stream.
-#' @param share_gnn logical. If `TRUE` (default), fit the GNN once on a
-#'   reference tree and reuse it across all posterior trees, recomputing
-#'   only the BM baseline per tree. Gives a ~10-15x speedup at n=10k.
-#'   See the "Share-GNN" section below for tree-uncertainty propagation
-#'   details. Set `FALSE` to fit from scratch on every tree (the pre-v0.9.1
-#'   behaviour) when you need exact tree-by-tree model independence.
-#' @param reference_tree optional `phylo` used as the training tree when
+#' @param share_gnn logical. With `gnn = TRUE`, `TRUE` (the default) trains
+#'   one GNN on a reference tree and reuses it while recomputing the
+#'   baseline for each posterior tree. Set `FALSE` to refit the GNN on each
+#'   tree. With the default `gnn = FALSE`, no GNN is trained in either mode.
+#'   See the "Share-GNN" section below.
+#' @param reference_tree optional `phylo` used for the reference fit when
 #'   `share_gnn = TRUE`. Default `NULL` selects the maximum-clade-credibility
 #'   tree via `phangorn::maxCladeCred(trees)`. If `phangorn` is not
 #'   installed, falls back to `trees[[1]]` with a warning.
+#' @param draws_method character. How the `m_per_tree` stochastic draws are
+#'   generated for each tree (P1-11). One of `"mc_dropout"` (default, back
+#'   compatible with pre-P1-11 behaviour) or `"conformal"`. See the "Which
+#'   draw mechanism this uses" section below for the trade-off between the
+#'   two.
+#' @param gnn logical. Passed through to [impute()] / [fit_pigauto()] for
+#'   every tree. When `TRUE`, the usual GNN correction is trained
+#'   (once, on the reference tree, when `share_gnn = TRUE`). When `FALSE`,
+#'   no GNN is used anywhere in the pipeline: baseline-only fits
+#'   throughout (the default since 0.11.0.9001; see [impute()]). With
+#'   `share_gnn = TRUE`, each tree's baseline is fit without held-out
+#'   splits (`splits = NULL`), matching the production
+#'   `baseline_full` semantics [fit_pigauto()] uses.
 #' @param ... additional arguments forwarded to [fit_pigauto()] via
 #'   [impute()].
 #'
@@ -110,11 +132,16 @@ resolve_reference_tree <- function(trees, reference_tree = NULL) {
 #'     \item{`imputed_mask`}{Logical matrix; `TRUE` where a cell was
 #'       originally missing.}
 #'     \item{`share_gnn`}{Logical; `TRUE` if the shared-GNN path was used.}
-#'     \item{`fit`}{Single \code{pigauto_fit} trained on the reference
+#'     \item{`draws_method`}{Character; `"mc_dropout"` or `"conformal"`,
+#'       echoing the argument this call used (P1-11).}
+#'     \item{`mi_workflow`}{`"pigauto_tree_sensitivity_diagnostic"`,
+#'       recording that these are prediction-sensitivity completions and
+#'       cannot be passed to [with_imputations()] or [pool_mi()].}
+#'     \item{`fit`}{Single \code{pigauto_fit} fitted on the reference
 #'       tree when `share_gnn = TRUE`; `NULL` otherwise.}
 #'     \item{`fits`}{List of `T` \code{pigauto_fit} objects (one per tree)
 #'       when `share_gnn = FALSE`; `NULL` when `share_gnn = TRUE`.}
-#'     \item{`reference_tree`}{The reference `phylo` used for GNN training
+#'     \item{`reference_tree`}{The reference `phylo` used for the shared fit
 #'       when `share_gnn = TRUE`; `NULL` otherwise.}
 #'     \item{`trees`}{The input posterior trees.}
 #'     \item{`species_col`}{Passed-through species column name.}
@@ -122,8 +149,8 @@ resolve_reference_tree <- function(trees, reference_tree = NULL) {
 #'
 #' @section Share-GNN (tree-sharing) mode:
 #'
-#' Under `share_gnn = TRUE` the GNN weights and spectral features are
-#' trained once on the reference tree (MCC by default). For each
+#' When `gnn = TRUE, share_gnn = TRUE`, the GNN weights and spectral features
+#' are trained once on the reference tree (MCC by default). For each
 #' posterior tree the BM / joint-MVN baseline is recomputed, and the
 #' prediction is the blend `(1 - r_cal) * baseline_t + r_cal * gnn_shared`.
 #' Because `r_cal` is calibrated once on held-out data at the reference
@@ -140,22 +167,25 @@ resolve_reference_tree <- function(trees, reference_tree = NULL) {
 #' On every real dataset benchmarked in the v0.9.0 campaign the gate
 #' closed partially or fully. This evidence is specific to those benchmark
 #' regimes and does not guarantee tree-variance calibration elsewhere.
-#' Set `share_gnn = FALSE` if you need exact per-tree model independence.
+#' Set `share_gnn = FALSE` with `gnn = TRUE` if you need a separate GNN fit
+#' for each tree. With the default `gnn = FALSE`, there is no GNN channel.
 #'
 #' @details
-#' For each tree the function runs the full pigauto pipeline
-#' (preprocess -> baseline -> GNN -> predict) when `share_gnn = FALSE`.
-#' With the default `share_gnn = TRUE`, the GNN is trained once and only
-#' the baseline is recomputed per tree. Topologies and branch lengths vary
-#' across trees, so the phylogenetic baseline covariance differs for each
+#' For each tree the function runs preprocessing, baseline fitting and
+#' prediction. A GNN is also fitted only when `gnn = TRUE`; with
+#' `share_gnn = TRUE`, that GNN is trained once on a reference tree.
+#' Topologies and branch lengths vary across trees, so the phylogenetic
+#' baseline covariance differs for each
 #' tree.
 #'
 #' The returned datasets may be compared descriptively to assess sensitivity
 #' of point imputations to the tree sample. No calibrated downstream standard
 #' error or Rubin-pooling claim is made for this path.
 #'
-#' **Computation time.** With `share_gnn = TRUE` (default): one GNN fit
-#' + T cheap baseline passes. Rough budget on a modern CPU laptop:
+#' **Computation time.** The following historical planning estimates apply
+#' to `gnn = TRUE`, with one shared GNN fit plus T baseline passes when
+#' `share_gnn = TRUE`. They are not timings for the current GNN-off default;
+#' estimate the intended tree and sample setting before a campaign.
 #'
 #' \tabular{rrrr}{
 #'   Species n \tab 1 fit \tab T = 50 share_gnn=TRUE \tab T = 50 share_gnn=FALSE \cr
@@ -163,6 +193,31 @@ resolve_reference_tree <- function(trees, reference_tree = NULL) {
 #'   5,000 \tab ~5-10 min \tab ~10-20 min \tab 4-8 hr \cr
 #'   10,000 \tab ~20-40 min \tab ~30-60 min \tab 17-33 hr
 #' }
+#'
+#' @section Which draw mechanism this uses (and its limitation):
+#' The default `draws_method = "mc_dropout"` passes
+#' `n_imputations = m_per_tree` to [impute()]. With `gnn = TRUE`, each draw
+#' combines a fresh baseline draw with a stochastic GNN pass. With the
+#' default `gnn = FALSE`, no GNN or dropout runs; only the baseline draw
+#' varies within each tree.
+#'
+#' This differs from the conformal option in [multi_impute()]. That
+#' function now defaults to `draws_method = "auto"`, selecting posterior
+#' draws for eligible continuous-trait inputs and conformal draws otherwise.
+#' Baseline and optional GNN draws reflect model and prior uncertainty,
+#' whereas conformal draws use held-out prediction residuals. Neither mechanism
+#' validates downstream pooling or inference for posterior-tree completions.
+#'
+#' \code{multi_impute_trees()} now exposes a \code{draws_method} argument
+#' (P1-11). \code{draws_method = "conformal"} runs \code{\link{impute}} with
+#' \code{n_imputations = 1} on each tree and draws the \code{m_per_tree}
+#' completions from the calibrated conformal scores instead, via the same
+#' internal sampling helper \code{multi_impute()} uses. Default remains
+#' \code{"mc_dropout"} for back compatibility. Within-tree calibration
+#' changes the within-tree stochastic completion mechanism; both settings are
+#' prediction-sensitivity diagnostics. Between-tree variation is present under
+#' either setting because the baseline (and, when \code{share_gnn = FALSE},
+#' the GNN) still varies per tree.
 #'
 #' @references
 #' Nakagawa S, de Villemereuil P (2019). "A general method for
@@ -186,8 +241,9 @@ resolve_reference_tree <- function(trees, reference_tree = NULL) {
 #'   per-tree baseline without re-calibrating the safety floor; it does not
 #'   establish downstream inferential validity.
 #'
-#' @seealso [multi_impute()] for single-tree prediction diagnostics,
-#'   [multi_impute_analysis()] for analysis-aware MI, and [trees300]
+#' @seealso [multi_impute()] for single-tree prediction diagnostics or,
+#'   with `draws_method = "posterior"`, single-tree inference on continuous
+#'   traits; [multi_impute_analysis()] for analysis-aware MI; and [trees300]
 #'
 #' @examples
 #' \donttest{
@@ -218,7 +274,11 @@ multi_impute_trees <- function(traits, trees, m_per_tree = 1L,
                                seed = NULL,
                                share_gnn = TRUE,
                                reference_tree = NULL,
+                               draws_method = c("mc_dropout", "conformal"),
+                               gnn = FALSE,
                                ...) {
+
+  draws_method <- match.arg(draws_method)
 
   # ---- Validate inputs -------------------------------------------------------
   m_per_tree <- as.integer(m_per_tree)
@@ -272,6 +332,8 @@ multi_impute_trees <- function(traits, trees, m_per_tree = 1L,
       covariates = covariates, epochs = as.integer(epochs),
       verbose = verbose, seed = seed,
       reference_tree = resolve_reference_tree(trees, reference_tree),
+      draws_method = draws_method,
+      gnn = gnn,
       ...
     )
   } else {
@@ -281,7 +343,8 @@ multi_impute_trees <- function(traits, trees, m_per_tree = 1L,
       multi_proportion_groups = multi_proportion_groups,
       log_transform = log_transform, missing_frac = missing_frac,
       covariates = covariates, epochs = as.integer(epochs),
-      verbose = verbose, seed = seed, ...
+      verbose = verbose, seed = seed, draws_method = draws_method,
+      gnn = gnn, ...
     )
   }
 
@@ -289,7 +352,9 @@ multi_impute_trees <- function(traits, trees, m_per_tree = 1L,
   out$reference_tree <- if (isTRUE(share_gnn)) resolve_reference_tree(trees, reference_tree) else NULL
   out$trees          <- trees
   out$species_col    <- species_col
-  class(out) <- c("pigauto_mi_trees", "pigauto_mi")
+  out$mi_workflow    <- "pigauto_tree_sensitivity_diagnostic"
+  class(out) <- c("pigauto_tree_sensitivity_diagnostic", "pigauto_mi_trees",
+                  "pigauto_mi")
   out
 }
 
@@ -297,7 +362,8 @@ multi_impute_trees <- function(traits, trees, m_per_tree = 1L,
 run_per_tree <- function(traits, trees, m_per_tree,
                          species_col, trait_types, multi_proportion_groups,
                          log_transform, missing_frac, covariates,
-                         epochs, verbose, seed, ...) {
+                         epochs, verbose, seed, draws_method = "mc_dropout",
+                         gnn = FALSE, ...) {
   T_trees      <- length(trees)
   M_total      <- T_trees * m_per_tree
   all_datasets <- vector("list", M_total)
@@ -307,6 +373,7 @@ run_per_tree <- function(traits, trees, m_per_tree,
   pooled_sum   <- NULL
   pooled_n     <- 0L
   trait_cols   <- setdiff(names(traits), species_col)
+  use_conformal <- identical(draws_method, "conformal")
 
   for (t in seq_len(T_trees)) {
     t_seed <- if (is.null(seed)) NULL else as.integer(seed + t - 1L)
@@ -317,7 +384,12 @@ run_per_tree <- function(traits, trees, m_per_tree,
       t_start <- proc.time()
     }
 
-    # Run full pipeline
+    # Run full pipeline. draws_method = "conformal" (P1-11) fits a single
+    # deterministic pass (n_imputations = 1) and draws the m_per_tree
+    # completions from the calibrated conformal scores via .conformal_draws()
+    # -- the same sampling helper multi_impute() uses. draws_method =
+    # "mc_dropout" (default) is unchanged: predict() itself runs m_per_tree
+    # stochastic dropout + BM-draw passes.
     res <- impute(
       traits        = traits,
       tree          = trees[[t]],
@@ -326,44 +398,56 @@ run_per_tree <- function(traits, trees, m_per_tree,
       multi_proportion_groups = multi_proportion_groups,
       log_transform = log_transform,
       missing_frac  = missing_frac,
-      n_imputations = m_per_tree,
+      n_imputations = if (use_conformal) 1L else m_per_tree,
       covariates    = covariates,
       epochs        = as.integer(epochs),
       verbose       = FALSE,
       seed          = t_seed,
+      gnn           = gnn,
       ...
     )
 
     pred <- res$prediction
-
-    # Build completed data.frames.
-    # When n_imputations=1 predict() returns pred$imputed directly (not a list).
-    # When n_imputations>1 it returns pred$imputed_datasets (a list of m).
-    imp_list <- if (!is.null(pred$imputed_datasets)) {
-      pred$imputed_datasets
-    } else {
-      list(pred$imputed)
-    }
-    if (length(imp_list) != m_per_tree) {
-      stop("Tree ", t, ": predict() did not return ", m_per_tree,
-           " imputed datasets. This is an internal error.", call. = FALSE)
-    }
 
     # `res$data$input_row_order` re-aligns internal-order imputations back
     # to the user's input row order (multi-obs reordering fix, 2026-04-26).
     # Each tree gets its own pigauto_data object, so we read this fresh
     # per tree.
     input_row_order <- res$data$input_row_order
+
+    if (use_conformal) {
+      completed_list <- .conformal_draws(traits, pred, res$imputed_mask,
+                                         res$fit$trait_map, m_per_tree,
+                                         species_col = species_col,
+                                         seed = t_seed,
+                                         input_row_order = input_row_order)
+    } else {
+      # When n_imputations=1 predict() returns pred$imputed directly (not a
+      # list). When n_imputations>1 it returns pred$imputed_datasets (a list
+      # of m).
+      imp_list <- if (!is.null(pred$imputed_datasets)) {
+        pred$imputed_datasets
+      } else {
+        list(pred$imputed)
+      }
+      if (length(imp_list) != m_per_tree) {
+        stop("Tree ", t, ": predict() did not return ", m_per_tree,
+             " imputed datasets. This is an internal error.", call. = FALSE)
+      }
+      completed_list <- lapply(imp_list, function(imp_df) {
+        build_completed(traits, imp_df, species_col,
+                        input_row_order = input_row_order)$completed
+      })
+    }
+
     for (k in seq_len(m_per_tree)) {
       idx <- (t - 1L) * m_per_tree + k
-      completed_info <- build_completed(traits, imp_list[[k]], species_col,
-                                          input_row_order = input_row_order)
-      completed_i <- completed_info$completed
+      completed_i <- completed_list[[k]]
       all_datasets[[idx]] <- completed_i
       tree_index[idx]     <- t
 
       if (is.null(imputed_mask)) {
-        imputed_mask <- completed_info$imputed_mask
+        imputed_mask <- res$imputed_mask
       }
 
       if (is.null(pooled_sum)) {
@@ -411,7 +495,8 @@ run_per_tree <- function(traits, trees, m_per_tree,
     se           = NULL,
     imputed_mask = imputed_mask,
     fits         = all_fits,
-    fit          = NULL
+    fit          = NULL,
+    draws_method = draws_method
   )
 }
 
@@ -420,10 +505,12 @@ run_per_tree <- function(traits, trees, m_per_tree,
 run_shared_gnn <- function(traits, trees, m_per_tree,
                            species_col, trait_types, multi_proportion_groups,
                            log_transform, missing_frac, covariates,
-                           epochs, verbose, seed, reference_tree, ...) {
+                           epochs, verbose, seed, reference_tree,
+                           draws_method = "mc_dropout", gnn = FALSE, ...) {
   T_trees <- length(trees)
   M_total <- T_trees * m_per_tree
   dots <- list(...)
+  use_conformal <- identical(draws_method, "conformal")
   if (verbose) {
     cat(sprintf("multi_impute_trees (share_gnn=TRUE): %d trees x %d imputations = %d datasets\n",
                 T_trees, m_per_tree, M_total))
@@ -438,7 +525,8 @@ run_shared_gnn <- function(traits, trees, m_per_tree,
     log_transform = log_transform, missing_frac = missing_frac,
     n_imputations = m_per_tree, covariates = covariates,
     epochs = as.integer(epochs), verbose = FALSE,
-    seed = if (is.null(seed)) NULL else as.integer(seed), ...
+    seed = if (is.null(seed)) NULL else as.integer(seed),
+    gnn = gnn, ...
   )
   fit_ref    <- res_ref$fit
   data_ref   <- res_ref$data
@@ -452,6 +540,9 @@ run_shared_gnn <- function(traits, trees, m_per_tree,
   pooled_n     <- 0L
   trait_cols   <- setdiff(names(traits), species_col)
   idx <- 0L
+  # Per-tree Pagel's lambda from each tree's fit_baseline() (NULL only for
+  # baselines built before the lambda fields existed). One entry per tree (length T_trees, not M_total).
+  lambda_per_trait_by_tree <- vector("list", T_trees)
 
   for (t in seq_len(T_trees)) {
     if (verbose) cat(sprintf("  Tree %d/%d: baseline only...", t, T_trees))
@@ -468,20 +559,56 @@ run_shared_gnn <- function(traits, trees, m_per_tree,
     # Do not pass graph_ref here. The shared GNN keeps the reference-tree
     # graph inside fit_ref for prediction, but each tree-specific baseline
     # must recompute its own cophenetic distances and phylogenetic covariance.
+    #
+    # gnn = FALSE (S3, docs/dev-log/arc/2026-09-18-gnn-off-contract.md):
+    # fit each tree's baseline tax-free (splits = NULL, every observed cell
+    # informs every other cell), matching the production `baseline_full`
+    # semantics fit_pigauto()/impute() use elsewhere. gnn = TRUE keeps the
+    # held-out splits_ref fit, unchanged.
+    # S5b: for gnn = FALSE (splits = NULL below, production-baseline
+    # semantics) there are no validation cells for this per-tree refit to
+    # re-decide "auto" with, so reuse the reference tree's own per-trait
+    # route (fit_ref$model_config$predict_method_by_trait, from its own
+    # held-out `baseline`) via predict_route. For gnn = TRUE (splits_ref
+    # below, real validation cells), let "auto" re-decide per tree as
+    # usual -- no predict_route override needed.
+    predict_route_arg <- if (isFALSE(gnn)) {
+      baseline_arg("predict_method_by_trait", NULL)
+    } else {
+      NULL
+    }
     baseline_t <- fit_baseline(
-      data_ref, 
-      trees[[t]], 
-      splits = splits_ref,
+      data_ref,
+      trees[[t]],
+      splits = if (isFALSE(gnn)) NULL else splits_ref,
       graph = NULL,
-      # Replay all the config options:
-      lambda_mode = baseline_arg("lambda_mode", "fixed_1"),
+      # Replay all the config options (joint_solver / predict_method /
+      # joint_refine_iter added here -- pre-existing omission, now
+      # load-bearing since gnn = FALSE fits go through the joint /
+      # threshold-joint baseline dispatch more often than the GNN-on
+      # default):
+      lambda_mode = baseline_arg("lambda_mode", "estimate"),
+      # Fits recorded before discrete_lambda existed used lambda = 1.
+      discrete_lambda = baseline_arg("discrete_lambda", "fixed_1"),
       multi_obs_aggregation = baseline_arg("multi_obs_aggregation", "hard"),
       em_iterations = baseline_arg("em_iterations", 0L),
       em_tol = baseline_arg("em_tol", 1e-3),
-      em_offdiag = baseline_arg("em_offdiag", FALSE)
+      em_offdiag = baseline_arg("em_offdiag", FALSE),
+      joint_solver = baseline_arg("joint_solver", "inhouse"),
+      predict_method = baseline_arg("predict_method", "auto"),
+      joint_refine_iter = baseline_arg("joint_refine_iter", 0L),
+      predict_route = predict_route_arg,
+      seed = if (is.null(seed)) NULL else as.integer(seed) + t
     )
+    # NULL only for baselines built before lambda_per_trait existed.
+    lambda_per_trait_by_tree[[t]] <- baseline_t$lambda_per_trait
+    # draws_method = "conformal" (P1-11): a single deterministic pass per
+    # tree, then draw m_per_tree completions from the conformal scores held
+    # on fit_ref (calibrated once, on the reference tree) via the same
+    # sampling helper multi_impute() uses. draws_method = "mc_dropout"
+    # (default): unchanged -- m_per_tree stochastic dropout + BM-draw passes.
     pred_t <- stats::predict(fit_ref, return_se = TRUE,
-                              n_imputations = m_per_tree,
+                              n_imputations = if (use_conformal) 1L else m_per_tree,
                               baseline_override = baseline_t)
 
     # Build completed data.frames (reuse build_completed).  In the share-GNN
@@ -490,16 +617,31 @@ run_shared_gnn <- function(traits, trees, m_per_tree,
     # the input data.frame's species column), we can reuse data_ref's
     # input_row_order across all trees.  (Multi-obs reordering fix, 2026-04-26.)
     input_row_order <- data_ref$input_row_order
+
+    if (use_conformal) {
+      # res_ref$imputed_mask does not depend on the tree (only on which
+      # cells are NA in `traits`), so it is safe to reuse across trees --
+      # matching the imputed_mask capture below, which is likewise set once.
+      completed_list <- .conformal_draws(traits, pred_t, res_ref$imputed_mask,
+                                         fit_ref$trait_map, m_per_tree,
+                                         species_col = species_col,
+                                         seed = if (is.null(seed)) NULL else as.integer(seed) + t - 1L,
+                                         input_row_order = input_row_order)
+    } else {
+      completed_list <- lapply(seq_len(m_per_tree), function(k) {
+        one <- if (!is.null(pred_t$imputed_datasets)) pred_t$imputed_datasets[[k]]
+               else pred_t$imputed
+        build_completed(traits, one, species_col,
+                        input_row_order = input_row_order)$completed
+      })
+    }
+
     for (k in seq_len(m_per_tree)) {
       idx <- idx + 1L
-      one <- if (!is.null(pred_t$imputed_datasets)) pred_t$imputed_datasets[[k]]
-             else pred_t$imputed
-      info <- build_completed(traits, one, species_col,
-                                input_row_order = input_row_order)
-      completed_i <- info$completed
+      completed_i <- completed_list[[k]]
       all_datasets[[idx]] <- completed_i
       tree_index[idx]     <- t
-      if (is.null(imputed_mask)) imputed_mask <- info$imputed_mask
+      if (is.null(imputed_mask)) imputed_mask <- res_ref$imputed_mask
 
       # Pool from the user-facing completed datasets, not raw pred_t$imputed:
       # completed_i is already in input row order, preserves species_col and
@@ -559,7 +701,12 @@ run_shared_gnn <- function(traits, trees, m_per_tree,
     se           = pooled_se,
     imputed_mask = imputed_mask,
     fit          = fit_ref,
-    fits         = NULL
+    fits         = NULL,
+    draws_method = draws_method,
+    # List of length T_trees (indexed like tree_index's distinct values),
+    # each element the per-tree baseline's lambda_per_trait. NULL entries
+    # only for baselines built before this field existed.
+    lambda_per_trait_by_tree = lambda_per_trait_by_tree
   )
 }
 
@@ -579,9 +726,14 @@ print.pigauto_mi_trees <- function(x, ...) {
   n_imp_cells <- sum(x$imputed_mask)
   pct <- if (total_cells > 0) 100 * n_imp_cells / total_cells else 0
 
+  method_label <- switch(x$draws_method %||% "mc_dropout",
+    mc_dropout = "MC dropout",
+    conformal  = "conformal-width sampling",
+    x$draws_method
+  )
   cat("pigauto experimental posterior-tree prediction sensitivity\n")
   cat(sprintf("  Trees     : %d posterior phylogenies\n", T_trees))
-  cat(sprintf("  Per tree  : %d completion draws (MC dropout)\n", m_per_tree))
+  cat(sprintf("  Per tree  : %d completion draws (%s)\n", m_per_tree, method_label))
   cat(sprintf("  Total     : %d completed datasets\n", M_total))
   cat(sprintf("  Species   : %d\n", n_sp))
   cat(sprintf("  Traits    : %d -- %s\n", length(trait_cols),

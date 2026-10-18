@@ -5,7 +5,10 @@
 #' standard errors combine within-imputation sampling variance and
 #' between-imputation variance. Correct Rubin arithmetic does not make an
 #' incompatible imputation model inferentially valid. For pigauto inference,
-#' fits should come from the documented [multi_impute_analysis()] workflow.
+#' fits should come from the documented [multi_impute_analysis()] workflow,
+#' or, for continuous traits, from [multi_impute()] with
+#' `draws_method = "posterior"` (see [with_imputations()] for the analyses
+#' those draws cover), via [with_imputations()].
 #' The backend is experimental and supports fixed-effect coefficients only. Variance
 #' components, correlations, random-effect predictions, BLUPs/conditional
 #' modes, latent loadings, and other structured parameters are unsupported.
@@ -15,13 +18,20 @@
 #'   `nlme::lme`, `lme4::merMod`, `glmmTMB::glmmTMB`, `drmTMB`, and
 #'   `gllvmTMB_multi` fits. Other classes implementing `coef()` and `vcov()`
 #'   also work. The output of [with_imputations()] is accepted directly.
-#'   `MCMCglmm` fits are rejected -- see Details.
+#'   Bayesian fits (`brms`, `MCMCglmm`) are rejected; see Details.
+#'   Bare user-supplied fit lists are accepted with an explicit warning because
+#'   their imputation provenance cannot be verified.
+#'   pigauto workflow classes and markers are caller-controlled metadata; they
+#'   do not authenticate the fits or their history.
 #' @param conf.level Confidence level for the pooled interval (default
 #'   `0.95`).
 #' @param coef_fun Optional function extracting a named numeric fixed-effect
 #'   vector from one fit. `NULL` uses the automatic class adapter. Custom
 #'   coefficient and covariance extractors can be supplied independently;
 #'   callers must ensure custom extractors select fixed effects only.
+#'   For recognized `drmTMB` and `gllvmTMB_multi` fits, pigauto still requires
+#'   convergence code zero and a positive-definite Hessian, even when a custom
+#'   extractor is supplied.
 #' @param vcov_fun Optional function extracting the fixed-effect covariance
 #'   matrix. `NULL` uses the automatic class adapter. Base matrices and
 #'   `Matrix` objects are accepted; the selected covariance block must be
@@ -76,7 +86,7 @@
 #' small-sample FMI adjustment. A completely deterministic quantity
 #' (`B = W = 0`) always has zero FMI and infinite df.
 #'
-#' Only fixed-effect coefficients are pooled in version 0.10.0. Random-effect
+#' Only fixed-effect coefficients are pooled. Random-effect
 #' variances and correlations, BLUPs/conditional modes, latent loadings, and
 #' other structured parameters require parameter-specific transformations and
 #' are not supported by the automatic `pool_mi()` adapters. Custom extractors
@@ -85,12 +95,25 @@
 #' The `glmmTMB` adapter selects conditional fixed effects only. The `drmTMB`
 #' adapter includes named distributional fixed-effect blocks such as regression
 #' coefficients for `mu` and `sigma`; those are fixed coefficients, not
-#' random-effect variance components.
+#' random-effect variance components. `drmTMB` and `gllvmTMB` need to be
+#' installed and loadable only when their automatic adapters are used.
+#' For either recognized backend class, pooling also requires the fit to report
+#' scalar convergence code `0` and `pdHess = TRUE`; missing or invalid status
+#' is rejected before coefficient extraction, including with custom extractors.
 #'
-#' **MCMCglmm fits** are rejected because Rubin's rules are not the right
-#' tool for posterior samples: variance decomposition does not generalise
-#' cleanly to posterior distributions. No MCMCglmm downstream workflow is
-#' supported by the initial analysis-aware backend.
+#' **Supported classes.** `lm`, `glm`, `gls`, `lme`, `merMod` (lme4),
+#' `glmmTMB` (conditional component), `drmTMB`, and `gllvmTMB_multi` are
+#' handled automatically. Other classes are pooled through their
+#' `coef()` / `vcov()` methods, or through `coef_fun` / `vcov_fun` /
+#' `tidy_fun`.
+#'
+#' **Bayesian fits (brms, MCMCglmm) are rejected** because Rubin's rules are
+#' not the right tool for posterior samples: they are pooled by concatenating
+#' posterior draws across imputations. For brms, use
+#' `brms::brm_multiple(formula, data = mi$datasets)`, or
+#' `brms::combine_models()` on a list of existing fits. For MCMCglmm,
+#' concatenate the `Sol` samples across fits. No Bayesian downstream
+#' workflow is supported by the analysis-aware backend.
 #'
 #' @references
 #' Rubin DB (1987). *Multiple Imputation for Nonresponse in Surveys.*
@@ -135,6 +158,59 @@ pool_mi <- function(fits,
     stop("`fits` must be a list of model fits.", call. = FALSE)
   }
 
+  workflow <- attr(fits, "mi_workflow")
+  unverified_bare <- FALSE
+  if (identical(workflow, "pigauto_diagnostic_mi") ||
+      inherits(fits, "pigauto_diagnostic_mi")) {
+    stop("Prediction-diagnostic completions from `multi_impute()` cannot be ",
+         "pooled. Use `multi_impute_analysis()` for the supported narrow ",
+         "workflow, or, for continuous traits, ",
+         "`multi_impute(draws_method = \"posterior\")`.", call. = FALSE)
+  } else if (identical(workflow, "pigauto_tree_sensitivity_diagnostic") ||
+             inherits(fits, "pigauto_tree_sensitivity_diagnostic") ||
+             inherits(fits, "pigauto_mi_trees")) {
+    stop("Tree-sensitivity diagnostics from `multi_impute_trees()` cannot be ",
+         "pooled. Tree-aware downstream pooling is unsupported; use ",
+         "`multi_impute_analysis()` for the supported narrow workflow.",
+         call. = FALSE)
+  } else if (identical(workflow, "pigauto_posterior_plugin_diagnostic") ||
+             (inherits(fits, "pigauto_posterior_mi") &&
+              identical(fits$mi_workflow,
+                        "pigauto_posterior_plugin_diagnostic"))) {
+    stop(.mip_plugin_refusal(), call. = FALSE)
+  } else if (inherits(fits, "pigauto_posterior_mi") ||
+             inherits(fits, "pigauto_analysis_mi")) {
+    stop("`pool_mi()` takes the list of fits returned by ",
+         "`with_imputations()`, not the imputation object itself. Run ",
+         "`fits <- with_imputations(mi, .f)` and then `pool_mi(fits)`.",
+         call. = FALSE)
+  } else if (inherits(fits, "pigauto_mi")) {
+    stop("Legacy `pigauto_mi` fit lists have no analysis-aware provenance. ",
+         "Refit with `multi_impute_analysis()` and `with_imputations()` ",
+         "before pooling.", call. = FALSE)
+  } else if (inherits(fits, "pigauto_mi_fits")) {
+    if (is.null(workflow)) {
+      stop("Legacy `pigauto_mi_fits` objects have no analysis-aware ",
+           "provenance. Refit with `multi_impute_analysis()` and ",
+           "`with_imputations()` before pooling.", call. = FALSE)
+    }
+    if (!(workflow %in% c("pigauto_analysis_mi_v1",
+                          "pigauto_posterior_mi_v1"))) {
+      stop("`fits` carries unknown multiple-imputation provenance and cannot be ",
+           "pooled safely.", call. = FALSE)
+    }
+  } else if (identical(workflow, "pigauto_analysis_mi_v1") ||
+             identical(workflow, "pigauto_posterior_mi_v1")) {
+    stop("`mi_workflow = \"", workflow, "\"` is inconsistent ",
+         "provenance for a fit list not created by `with_imputations()`.",
+         call. = FALSE)
+  } else if (is.null(workflow)) {
+    unverified_bare <- TRUE
+  } else {
+    stop("`fits` carries unknown multiple-imputation provenance and cannot be ",
+         "pooled safely.", call. = FALSE)
+  }
+
   tree_index <- attr(fits, "tree_index")
   n_trees <- attr(fits, "n_trees")
   m_per_tree <- attr(fits, "m_per_tree")
@@ -152,6 +228,16 @@ pool_mi <- function(fits,
     if (!is.null(tree_index)) tree_index <- tree_index[!is_err]
   }
 
+  # Known optional backends must pass convergence and Hessian checks even
+  # when callers supply custom coefficient or tidy extractors.
+  for (fit in fits) {
+    if (inherits(fit, "drmTMB")) {
+      .pool_mi_validate_backend_status(fit, "drmTMB")
+    } else if (inherits(fit, "gllvmTMB_multi")) {
+      .pool_mi_validate_backend_status(fit, "gllvmTMB")
+    }
+  }
+
   M <- length(fits)
   if (M < 2L) {
     stop("Need at least 2 fits to pool; got ", M, ".", call. = FALSE)
@@ -166,6 +252,19 @@ pool_mi <- function(fits,
       "`coda::as.mcmc(do.call(rbind, lapply(fits, function(f) f$Sol)))`. ",
       "For the frequentist Rubin's-rules path, see ",
       "`vignette('mixed-types', package = 'pigauto')`.",
+      call. = FALSE
+    )
+  }
+
+  # brms detection -- Bayesian fits are pooled by concatenating draws.
+  if (inherits(fits[[1]], "brmsfit")) {
+    stop(
+      "pool_mi() applies Rubin's rules and is not appropriate for ",
+      "brmsfit objects. Bayesian fits are pooled by concatenating ",
+      "posterior draws across imputations, not by Rubin's rules. Fit ",
+      "all imputations in one call with ",
+      "`brms::brm_multiple(formula, data = mi$datasets)`, or combine ",
+      "existing fits with `brms::combine_models()`.",
       call. = FALSE
     )
   }
@@ -211,7 +310,8 @@ pool_mi <- function(fits,
   # Sanity: all elements must be numeric vectors with consistent names.
   coef_classes <- vapply(coefs, function(x) {
     is.numeric(x) && length(x) > 0L && !is.null(names(x)) &&
-      all(nzchar(names(x))) && !anyDuplicated(names(x)) && all(is.finite(x))
+      !anyNA(names(x)) && all(nzchar(names(x))) &&
+      !anyDuplicated(names(x)) && all(is.finite(x))
   }, logical(1))
   if (!all(coef_classes)) {
     stop("The coefficient extractor must return a finite, uniquely named ",
@@ -220,17 +320,18 @@ pool_mi <- function(fits,
   }
 
   nm_ref <- names(coefs[[1]])
-  nm_ok  <- vapply(coefs, function(x) identical(names(x), nm_ref),
+  nm_ok  <- vapply(coefs, function(x) setequal(names(x), nm_ref),
                    logical(1))
   if (!all(nm_ok)) {
     # Diagnostic: show which fits deviated.
     offenders <- which(!nm_ok)
     stop(
       "Coefficient names differ across fits. Rubin's rules require a ",
-      "common set of terms. First offending fit: index ", offenders[1],
-      ". Reference names: ", paste(nm_ref, collapse = ", "),
-      ". Offender names: ", paste(names(coefs[[offenders[1]]]),
+      "common set of terms. First offending fit: fit ", offenders[1],
+      ". Missing terms: ", paste(setdiff(nm_ref, names(coefs[[offenders[1]]])),
                                   collapse = ", "),
+      ". Extra terms: ", paste(setdiff(names(coefs[[offenders[1]]]), nm_ref),
+                                collapse = ", "),
       call. = FALSE
     )
   }
@@ -335,33 +436,46 @@ pool_mi <- function(fits,
   )
   attr(out, "m") <- M
   attr(out, "conf.level") <- conf.level
+  if (!is.null(workflow)) attr(out, "mi_workflow") <- workflow
   if (!is.null(tree_index)) {
     attr(out, "tree_index") <- tree_index
     attr(out, "n_trees") <- n_trees
     attr(out, "m_per_tree") <- m_per_tree
   }
   class(out) <- c("pigauto_pooled", "data.frame")
+  if (unverified_bare) {
+    warning("pool_mi() received a bare fit list with unverified provenance; ",
+            "Rubin arithmetic will run, but the imputation workflow was not ",
+            "validated by pigauto.", call. = FALSE)
+  }
   out
 }
 
 
 .pool_mi_auto_coef <- function(fit) {
   if (inherits(fit, "gllvmTMB_multi")) {
+    .pool_mi_validate_backend_status(fit, "gllvmTMB")
     td <- .pool_mi_gllvm_tidy(fit)
     return(stats::setNames(td$estimate, td$term))
   }
 
   if (inherits(fit, "drmTMB")) {
-    blocks <- stats::coef(fit)
+    .pool_mi_validate_backend_status(fit, "drmTMB")
+    blocks <- .pool_mi_drm_coef_blocks(fit)
     if (!is.list(blocks) || is.null(names(blocks))) {
       stop("The drmTMB fixed-effect adapter could not find named ",
            "distributional coefficient blocks.", call. = FALSE)
     }
-    values <- unlist(blocks, use.names = FALSE)
-    block_names <- rep(names(blocks), lengths(blocks))
-    term_names <- unlist(lapply(blocks, names), use.names = FALSE)
-    names(values) <- paste0(block_names, ":", term_names)
-    return(values)
+    if (!length(blocks) || anyNA(names(blocks)) || any(!nzchar(names(blocks))) ||
+        anyDuplicated(names(blocks)) || any(vapply(blocks, function(x) {
+          !is.numeric(x) || !length(x) || is.null(names(x)) ||
+            anyNA(names(x)) || any(!nzchar(names(x))) ||
+            anyDuplicated(names(x))
+        }, logical(1)))) {
+      stop("The drmTMB adapter requires uniquely named fixed-effect terms ",
+           "within uniquely named coefficient components.", call. = FALSE)
+    }
+    return(.pool_mi_drm_blocks_to_coef(blocks))
   }
 
   if (inherits(fit, "glmmTMB")) {
@@ -393,12 +507,9 @@ pool_mi <- function(fits,
 
 
 .pool_mi_gllvm_tidy <- function(fit) {
-  package <- sub("_multi$", "", class(fit)[[1L]])
-  namespace <- tryCatch(
-    asNamespace(package),
-    error = function(e) NULL
-  )
-  method <- if (is.null(namespace)) NULL else utils::getS3method(
+  package <- "gllvmTMB"
+  namespace <- .pool_mi_require_namespace(package)
+  method <- utils::getS3method(
     "tidy", "gllvmTMB_multi", optional = TRUE, envir = namespace
   )
   if (is.null(method)) {
@@ -407,6 +518,54 @@ pool_mi <- function(fits,
          call. = FALSE)
   }
   .pool_mi_validate_tidy(method(fit, effects = "fixed"), "gllvmTMB")
+}
+
+.pool_mi_require_namespace <- function(package) {
+  tryCatch(
+    loadNamespace(package),
+    error = function(e) {
+      stop("The automatic ", package, " adapter requires the package that ",
+           "created the fit to be installed and loadable at runtime: ",
+           conditionMessage(e), call. = FALSE)
+    }
+  )
+}
+
+.pool_mi_drm_coef_blocks <- function(fit) {
+  .pool_mi_require_namespace("drmTMB")
+  stats::coef(fit)
+}
+
+.pool_mi_drm_blocks_to_coef <- function(blocks) {
+  values <- unlist(blocks, use.names = FALSE)
+  block_names <- rep(names(blocks), lengths(blocks))
+  term_names <- unlist(lapply(blocks, names), use.names = FALSE)
+  names(values) <- paste0(block_names, ":", term_names)
+  values
+}
+
+.pool_mi_validate_backend_status <- function(fit, backend) {
+  if (identical(backend, "drmTMB")) {
+    convergence <- fit$opt$convergence
+    hessian_ok <- fit$sdr$pdHess
+  } else if (identical(backend, "gllvmTMB")) {
+    convergence <- fit$opt$convergence
+    hessian_ok <- fit$sd_report$pdHess
+  } else {
+    stop("Unknown optional backend: ", backend, call. = FALSE)
+  }
+  if (!is.numeric(convergence) || length(convergence) != 1L ||
+      !is.finite(convergence) || convergence != 0) {
+    stop(backend, " fit has a non-zero or invalid convergence code; refusing ",
+         "to pool fixed effects from an unconverged fit.", call. = FALSE)
+  }
+  if (!is.logical(hessian_ok) || length(hessian_ok) != 1L ||
+      is.na(hessian_ok) || !hessian_ok) {
+    stop(backend, " fit does not report a positive-definite Hessian; refusing ",
+         "to pool fixed effects from an invalid covariance estimate.",
+         call. = FALSE)
+  }
+  invisible(TRUE)
 }
 
 

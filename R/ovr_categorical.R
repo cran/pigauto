@@ -9,11 +9,27 @@
 #' has only 1 categorical-related column so Rphylopars stays
 #' well-conditioned.
 #'
+#' Footnote on the sister package: BACE once defaulted to OVR too, but
+#' as of 2026-08 its `ovr_categorical` default is FALSE (true
+#' multinomial), because OVR binaries hit quasi-separation in its
+#' one-observation-per-species MCMCglmm regime. That is a different
+#' estimator from this one -- pigauto's OVR sits on Rphylopars
+#' threshold-joint fits and its motivation (rank/conditioning) is
+#' unchanged by BACE's default. Do not copy BACE's multinomial default
+#' here without a pigauto-side measurement.
+#'
 #' @param data pigauto_data from preprocess_traits.
 #' @param tree phylo.
 #' @param trait_name character, name of the categorical trait.
 #' @param splits output of make_missing_splits() or NULL.
 #' @param graph optional graph (unused).
+#' @param joint_solver character, `"inhouse"` (default) or `"rphylopars"`.
+#'   Forwarded to each per-class `fit_joint_threshold_baseline()` call.
+#' @param joint_refine_iter integer, default `0L`. Forwarded to each
+#'   per-class `fit_joint_threshold_baseline()` call. See
+#'   `fit_joint_solver()` in R/joint_mvn_solver.R.
+#' @param discrete_lambda `"estimate"` (default) or `"fixed_1"`; forwarded to
+#'   each per-class `fit_joint_threshold_baseline()` call.
 #' @return numeric matrix (n_species x K) of P(class_k) per species; NA
 #'   for classes whose fit failed.
 #' @keywords internal
@@ -21,7 +37,15 @@
 fit_ovr_categorical_fits <- function(data, tree, trait_name,
                                       splits = NULL, graph = NULL,
                                       soft_aggregate = FALSE,
-                                      sd_prior_k = NULL) {
+                                      sd_prior_k = NULL,
+                                      joint_solver = "inhouse",
+                                      predict_method = "exact",
+                                      joint_refine_iter = 0L,
+                                      predict_method_explicit = NULL,
+                                      discrete_lambda = "estimate") {
+  if (is.null(predict_method_explicit)) {
+    predict_method_explicit <- !missing(predict_method)
+  }
   stopifnot(joint_mvn_available())
   # sd_prior_k: optional length-K vector of per-class prior SDs for Phase 6
   # EM. NULL default (plug-in 1) is the v0.9.1 byte-identical path.
@@ -95,11 +119,20 @@ fit_ovr_categorical_fits <- function(data, tree, trait_name,
     which_synth <- which(built_k$liab_cols == synth_col)
     if (length(which_synth) == 1L) sdv[which_synth] <- sd_k
 
+    # lambda_mode / lambda_fixed are deliberately NOT threaded here: the
+    # continuous columns of pd_k keep lambda = 1 (estimating them would be K
+    # wasted optimisations per categorical trait). Only the synthetic
+    # one-vs-rest binary column gets its own lambda, via `discrete_lambda`.
     jt <- tryCatch(
       fit_joint_threshold_baseline(pd_k, tree, splits = splits_k,
                                     graph = graph,
                                     soft_aggregate = soft_aggregate,
-                                    sd_prior_vec = sdv),
+                                    sd_prior_vec = sdv,
+                                    joint_solver = joint_solver,
+                                    predict_method = predict_method,
+                                    joint_refine_iter = joint_refine_iter,
+                                    predict_method_explicit = predict_method_explicit,
+                                    discrete_lambda = discrete_lambda),
       error = function(e) NULL
     )
     if (is.null(jt)) next
@@ -121,6 +154,23 @@ fit_ovr_categorical_fits <- function(data, tree, trait_name,
   }
 
   attr(probs, "per_class_fits") <- per_class_fits
+  # Aggregate the K per-class predict_method_used values into one summary
+  # for this categorical trait: "exact" only if every class that ran
+  # achieved exact; "per_column" if any class fell back or failed;
+  # NA_character_ if no class produced a usable value at all (e.g. every
+  # class's fit errored, or joint_solver = "rphylopars" throughout).
+  used_vals <- vapply(per_class_fits, function(cf) {
+    if (is.null(cf) || is.null(cf$jt)) return(NA_character_)
+    cf$jt$predict_method_used %||% NA_character_
+  }, character(1L))
+  used_vals <- used_vals[!is.na(used_vals)]
+  attr(probs, "predict_method_used") <- if (length(used_vals) == 0L) {
+    NA_character_
+  } else if (all(used_vals == "exact")) {
+    "exact"
+  } else {
+    "per_column"
+  }
   probs
 }
 
@@ -214,14 +264,27 @@ fit_ovr_categorical_fits_em <- function(data, tree, trait_name,
                                          splits = NULL, graph = NULL,
                                          soft_aggregate = FALSE,
                                          em_iterations = 5L,
-                                         em_tol = 1e-3) {
+                                         em_tol = 1e-3,
+                                         joint_solver = "inhouse",
+                                         predict_method = "exact",
+                                         joint_refine_iter = 0L,
+                                         predict_method_explicit = NULL,
+                                         discrete_lambda = "estimate") {
+  if (is.null(predict_method_explicit)) {
+    predict_method_explicit <- !missing(predict_method)
+  }
   stopifnot(em_iterations >= 1L)
 
   # Discover K by running a single plug-in iter first.
   iter1 <- fit_ovr_categorical_fits(data, tree, trait_name = trait_name,
                                      splits = splits, graph = graph,
                                      soft_aggregate = soft_aggregate,
-                                     sd_prior_k = NULL)
+                                     sd_prior_k = NULL,
+                                     joint_solver = joint_solver,
+                                     predict_method = predict_method,
+                                     joint_refine_iter = joint_refine_iter,
+                                     predict_method_explicit = predict_method_explicit,
+                                     discrete_lambda = discrete_lambda)
   K <- ncol(iter1)
   sigma_cat <- rep(1, K)
   probs     <- iter1
@@ -255,7 +318,12 @@ fit_ovr_categorical_fits_em <- function(data, tree, trait_name,
         fit_ovr_categorical_fits(data, tree, trait_name = trait_name,
                                   splits = splits, graph = graph,
                                   soft_aggregate = soft_aggregate,
-                                  sd_prior_k = sd_prior_k),
+                                  sd_prior_k = sd_prior_k,
+                                  joint_solver = joint_solver,
+                                  predict_method = predict_method,
+                                  joint_refine_iter = joint_refine_iter,
+                                  predict_method_explicit = predict_method_explicit,
+                                  discrete_lambda = discrete_lambda),
         error = function(e) NULL
       )
       if (is.null(iter_probs)) {

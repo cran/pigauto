@@ -106,12 +106,9 @@ proper R types (numeric, integer, factor, ordered).}
 \item{imputed_latent}{Numeric matrix (n x p_latent) of predictions in
 latent scale.}
 \item{se}{Numeric matrix (n x n_original_traits) of per-cell
-uncertainty.  Continuous/count/ordinal/proportion: SE in original
-scale (BM conditional SD, delta-method back-transformed).
-Binary: \code{min(p, 1-p)} — probability of being wrong (0 = certain,
-0.5 = maximally uncertain); \strong{not} a Gaussian SE.
-Categorical: \code{1 - max(p_k)} — margin from certainty; \strong{not}
-a Gaussian SE.  \code{NULL} if \code{return_se = FALSE}.}
+uncertainty. See the "What \code{$se} means per trait type" section
+below for what each trait type's column actually contains.
+\code{NULL} if \code{return_se = FALSE}.}
 \item{probabilities}{Named list.  Binary traits: numeric probability
 vector.  Categorical traits: n x K probability matrix.  Other
 types: not present.}
@@ -151,6 +148,22 @@ supported for downstream inference. Use \code{multi_impute_analysis()} for
 the narrow analysis-aware backend after consulting its supported-model and
 lifecycle documentation.
 
+\strong{\code{gnn = FALSE} fits (traditional-stats mode):} when the fit was
+produced with \code{gnn = FALSE}, no GNN was ever trained, so this
+function makes no \code{torch::} calls at all -- prediction is the
+calibrated baseline blend \code{r_cal_bm * baseline + r_cal_mean *
+mean_baseline_per_col} (\code{r_cal_gnn} is always zero) computed on
+plain R matrices. Two baselines are available: in production mode (the
+default, no \code{.mask_observed_idx}) predictions use \code{baseline_full}
+-- fit with \code{splits = NULL}, so every observed cell can inform every
+other cell; in evaluation mode (\code{.mask_observed_idx} supplied, as
+used internally for val/test scoring) predictions use the held-out
+\code{baseline} instead, so scored cells never see their own value.
+\code{n_imputations > 1} draws are BM posterior samples
+\code{MU_m ~ N(baseline_mu, baseline_se)} at originally-missing cells
+(observed cells are always restored to their true value), with no GNN
+dropout contribution.
+
 \strong{Decoding per type:}
 \describe{
 \item{continuous}{reverse z-score, then \code{exp()} if log-transformed}
@@ -159,7 +172,58 @@ lifecycle documentation.
 \item{ordinal}{reverse z-score, round to nearest valid integer level}
 \item{categorical}{\code{softmax()} over K latent columns, argmax}
 }
+
+\strong{Conformal intervals:} \code{conformal_lower} / \code{conformal_upper}
+use whatever \code{conformal_method} the fit was trained with
+(\code{\link{fit_pigauto}}). For \code{"mondrian"}, the half-width is not
+constant across rows: each target cell's phylogenetic locality (mean
+cophenetic distance to its 5 nearest training-observed species for that
+trait) picks the near- or far-stratum score stored on the fit, so
+predictions in undersampled clades get wider intervals. See
+\code{\link{fit_pigauto}}'s \code{conformal_method} argument for details.
+
+\strong{\code{zi_count} conformal intervals are conditional on non-zero.}
+\code{conformal_lower[, nm]} / \code{conformal_upper[, nm]} for a
+\code{zi_count} trait back-transform the magnitude latent (log1p-z of the
+count \emph{given it is non-zero}) plus/minus the conformal half-width
+that was calibrated on that same magnitude column
+(\code{\link{fit_pigauto}}'s \code{compute_conformal_scores()} scores
+zi_count on \code{latent_cols[2]}, never on the decoded \code{E[X]}).
+They are \strong{not} an interval for the expected value
+\code{E[X] = P(nonzero) * E[count | nonzero]} -- constructing a naive
+\eqn{\pm}quantile interval directly on \code{E[X]} would conflate gate
+and magnitude uncertainty into one number with no valid coverage
+interpretation. The gate probability \code{P(nonzero)} is available
+separately in \code{pred$probabilities[[nm]]}; combine it with the
+conditional interval yourself if you need an \code{E[X]}-scale bound.
 }
+\section{What \code{$se} means per trait type}{
+
+\code{pred$se} is a single \code{n x n_original_traits} matrix, but its
+per-column meaning differs by trait type — do not treat every column as
+a Gaussian standard error. This table is the definitive reference; other
+pigauto documentation (e.g. \code{\link{impute}}'s return value) points
+here instead of repeating it.
+
+\tabular{lll}{
+\strong{Type} \tab \strong{Value} \tab \strong{Is it a Gaussian SE?} \cr
+continuous / count / ordinal / proportion \tab model-dependent BM/joint conditional SD, delta-method back-transformed to original scale \tab It is not total final blended-prediction uncertainty and not a package-certified interval input. \cr
+binary \tab \code{min(p, 1-p)} \tab No. Probability of being wrong (0 = certain, 0.5 = maximally uncertain). \cr
+categorical \tab \code{1 - max(p_k)} \tab No. Margin from certainty (0 = certain, (K-1)/K = maximally uncertain). \cr
+zi_count \tab delta-method SE of \code{E[X] = P(nonzero) * E[count | nonzero]} \tab No. Mixes gate and magnitude uncertainty into one number; not a magnitude-scale SE. Use \code{conformal_lower} / \code{conformal_upper} (conditional-on-nonzero; see above) plus \code{probabilities} (the gate) for interval-scale zi_count uncertainty instead. \cr
+multi_proportion \tab \code{NA} \tab Not computed; use the CLR latent SE (\code{se_latent}) instead. \cr
+}
+
+These families are \strong{incompatible objects sharing one column name}:
+only the continuous-family entries are standard errors in the Gaussian
+sense, and \strong{none} of the binary / categorical / zi_count entries
+may be used in Rubin's-rules arithmetic. The supported downstream
+multiple-imputation routes start with
+\code{\link{multi_impute_analysis}} or, for continuous traits,
+\code{\link{multi_impute}} with \code{draws_method = "posterior"}, then
+use \code{\link{with_imputations}} and \code{\link{pool_mi}}.
+}
+
 \examples{
 \donttest{
 data(avonet300, tree300)

@@ -10,6 +10,8 @@ fit_pigauto(
   splits = NULL,
   graph = NULL,
   baseline = NULL,
+  gnn = FALSE,
+  baseline_full = NULL,
   hidden_dim = 64L,
   k_eigen = "auto",
   n_gnn_layers = 2L,
@@ -36,18 +38,22 @@ fit_pigauto(
   eval_every = 100L,
   patience = 10L,
   clip_norm = 1,
-  conformal_method = c("split", "bootstrap"),
+  conformal_method = c("split", "bootstrap", "mondrian"),
   conformal_bootstrap_B = 500L,
   conformal_split_val = FALSE,
   gate_method = c("cv_folds", "median_splits", "single_split"),
   gate_splits_B = 31L,
   gate_cv_folds = 5L,
-  safety_floor = TRUE,
-  phylo_signal_gate = TRUE,
+  safety_floor = FALSE,
+  phylo_signal_gate = FALSE,
   phylo_signal_threshold = 0.2,
   phylo_signal_method = c("lambda", "blomberg_k"),
   min_val_cells = 20L,
-  lambda_mode = c("fixed_1", "estimate", "cv", "bayes"),
+  lambda_mode = c("estimate", "fixed_1", "cv", "bayes"),
+  discrete_lambda = c("estimate", "fixed_1"),
+  joint_solver = c("inhouse", "rphylopars"),
+  predict_method = c("auto", "exact", "per_column"),
+  joint_refine_iter = 0L,
   verbose = TRUE,
   seed = NULL
 )
@@ -65,10 +71,49 @@ fit_pigauto(
 
 \item{baseline}{list (output of \code{\link{fit_baseline}}) or \code{NULL}.}
 
+\item{gnn}{logical. When \code{TRUE}, trains the attention-based
+GNN correction as described above. When \code{FALSE} (default), no GNN is
+constructed or trained and \code{fit_pigauto()} makes \strong{zero}
+\code{torch::} calls -- the fit is the phylogenetic baseline alone,
+optionally re-weighted against a grand-mean floor. \code{safety_floor}
+and \code{phylo_signal_gate} keep their usual semantics: the blend
+collapses to \eqn{r_{BM} \cdot \mu_{BM} + r_{MEAN} \cdot \mu_{MEAN}}
+(the GNN corner degenerates to the baseline, so its calibrated weight
+is folded into \eqn{r_{BM}}). With the defaults
+(\code{safety_floor = FALSE, phylo_signal_gate = FALSE}) this is the
+pure traditional-stats arm.
+\code{conformal_method = "mondrian"} is not supported when
+\code{gnn = FALSE} (its locality statistic conditions on a calibrated
+GNN prediction surface that does not exist here) and raises an error.
+User \code{covariates} enter pigauto only through the GNN, so under
+\code{gnn = FALSE} they are ignored (with a warning). Without a
+validation split (\code{splits = NULL}) the fit is pure baseline
+(\eqn{r_{BM} = 1}) and carries no conformal scores.
+Default \code{FALSE} since pigauto 0.11.0.9001: on simulated and real
+data at the current baseline defaults the GNN did not lower
+imputation error and took 20 to 90 times longer to fit
+(\code{docs/dev-log/arc/2026-10-02-campaign-gnn-rerun.md}). Set
+\code{gnn = TRUE} to train it, for example to use \code{covariates},
+which only the GNN uses, or to restore the behaviour of earlier
+versions.}
+
+\item{baseline_full}{list (output of \code{\link{fit_baseline}} with
+\code{splits = NULL}) or \code{NULL}. Only used when \code{gnn = FALSE}:
+the production-mode baseline, fit on ALL observed cells (no val/test
+hold-out), used by \code{predict.pigauto_fit()} for ordinary
+(non-evaluation) predictions. \code{baseline} itself always stays the
+held-out fit and is what every scorer (\code{val_rmse}, \code{test_rmse},
+\code{conformal_scores}, \code{evaluate()}) reads. When \code{NULL}
+(default) and \code{gnn = FALSE}, it is computed internally via
+\code{fit_baseline(data, tree, splits = NULL, ...)}; ignored when
+\code{gnn = TRUE} unless explicitly supplied (e.g. by \code{impute()}),
+in which case it is stored but not used for training.}
+
 \item{hidden_dim}{integer. Hidden layer width (default \code{64}).}
 
-\item{k_eigen}{integer. Number of spectral node features (default
-\code{8}).}
+\item{k_eigen}{integer or \code{"auto"}. Number of spectral node
+features. The default \code{"auto"} scales with tree size; an integer
+specifies the dimension directly.}
 
 \item{n_gnn_layers}{integer. Number of graph message-passing layers
 (default \code{2}).  Each layer has its own learnable alpha gate,
@@ -102,17 +147,9 @@ the model builds per-trait tokens from each row's latent values
 multi-head self-attention block over the trait sequence, mean-pools
 to a \code{trait_embed_dim} feature, and concatenates it alongside
 \code{(x, coords, covs)} at the encoder input. Intended for trait
-sets with strong within-row functional coupling that the joint MVN /
-threshold-joint baseline cannot capture (e.g. nonlinear cross-trait
-structure). On the BIEN n=2000 plant bench it did \strong{not} improve
-pooled RMSE (cross-trait covariance is already captured by the joint
-baseline); kept as
-an opt-in for datasets where it may help. Default \code{FALSE}
-preserves v0.9.2 behaviour exactly. Note: Ablation testing
-demonstrates that this within-row attention recovers only a small,
-sub-material gain, and only when cross-trait structure is explicitly
-non-linear and the joint-MVN baseline is present; it cannot model
-non-linear coupling on its own.}
+sets with within-row functional coupling not represented by the selected
+baseline. Assess this opt-in architecture with held-out evaluation on the
+intended data. Default \code{FALSE} preserves v0.9.2 behaviour exactly.}
 
 \item{n_trait_heads}{integer. Number of attention heads in the within-row
 self-attention block when \code{use_trait_attention = TRUE}. Default
@@ -143,7 +180,8 @@ ramps from \code{corruption_start} to \code{corruption_rate}
 (default \code{500}).  Set to \code{0} for fixed corruption.}
 
 \item{refine_steps}{integer. Iterative refinement steps at inference
-(default \code{8}).}
+(default \code{8}). Gate calibration and conformal scoring use the
+same number of steps so the calibrated surface matches predict.}
 
 \item{lambda_shrink}{numeric. Weight on the shrinkage penalty
 \code{||delta - baseline||^2} that keeps the GNN correction close
@@ -169,45 +207,35 @@ Set to \code{0} to disable.}
 
 \item{clip_norm}{numeric. Gradient clip norm (default \code{1.0}).}
 
-\item{conformal_method}{character. How the conformal prediction score
-is estimated from validation residuals.  \code{"split"} (default,
-backward-compatible) takes a single sample quantile; \code{"bootstrap"}
-takes \code{conformal_bootstrap_B} bootstrap resamples of the val
-residuals and averages the per-resample quantiles.  Empirically the
-bootstrap variant reduces the conformal-score variance across seeds
-by ~30\% at small \code{n_val}, but on the simulation design used to
-evaluate it (n=150 species, 35\\% trait_MAR) it did not translate
-into better 95\\% coverage stability (coverage SD 0.094 vs 0.102
-across 10 seeds).  Ship as an opt-in experimental knob; defaults to
-\code{"split"}.}
+\item{conformal_method}{character. How the conformal residual score is
+estimated from held-out validation cells. \code{"split"} (default,
+backward-compatible) takes a sample quantile; \code{"bootstrap"}
+averages quantiles from \code{conformal_bootstrap_B} bootstrap resamples;
+and \code{"mondrian"} stratifies validation cells by phylogenetic
+sampling locality before estimating a score per stratum. These choices
+support nominal held-out diagnostics, not package-certified coverage.
+\code{"mondrian"} is single-observation only because its locality is
+species-level. If either stratum is too small, that trait uses the global
+\code{"split"} score instead.}
 
 \item{conformal_bootstrap_B}{integer. Bootstrap resamples used when
 \code{conformal_method = "bootstrap"}; default \code{500}.  Ignored
 otherwise.}
 
-\item{conformal_split_val}{logical. Default \code{FALSE} (pre-2026-04-28
-single-set behaviour, retained because forcing the split regresses
-the AVONET300 / OVR-categorical / BIEN safety-floor smoke benches by
-2-26\%). When \code{TRUE}, the validation set is split per latent
-column into a calibration half (used to pick the calibrated blend
-gate) and a conformal half (used to compute the conformal residual
-quantile). This restores split-conformal exchangeability — without
-the split, the gate is selected to minimise residual MSE on the very
-cells whose residuals drive the conformal quantile, producing
-systematic undercoverage (most visible at small \code{n_val}; see
-the \code{coverage_investigation} memo). Use this when accurate 95\%
-coverage matters more than the bench-grade RMSE; the split only
-activates per-column when that column has at least
-\code{2 * min_val_cells} val cells (smaller columns silently fall
-back to the single-set path to keep \code{calibrate_gates()}'s
-half-A / half-B cross-check stable).}
+\item{conformal_split_val}{logical. Default \code{FALSE}: gate selection
+and residual-score estimation share validation cells. When \code{TRUE},
+each eligible latent column separates those tasks into calibration and
+residual-estimation subsets. This separation does not certify package-wide coverage.
+Columns without enough validation cells retain the
+shared-data path. With either setting, use \code{cross_validate()} and
+report held-out diagnostics for the intended data.}
 
 \item{gate_method}{character. How the per-trait calibrated gate is
-chosen.  \code{"single_split"} (default, backward-compatible) runs
+chosen.  \code{"single_split"} runs
 the grid search on a single random half-A / half-B split of the val
 rows; \code{"median_splits"} repeats the whole procedure for
 \code{gate_splits_B} random splits and takes the median
-\code{best_g}.  \code{"cv_folds"} (2026-04-30) partitions val cells
+\code{best_g}.  \code{"cv_folds"} (default since PR #102, 2026-05-17) partitions val cells
 into \code{gate_cv_folds} (default 5) deterministic non-overlapping
 folds and runs the grid + half-B-verify procedure once per fold
 (training set = K-1 folds, held-out = remaining fold), taking the
@@ -216,10 +244,8 @@ uses larger training sets per split (K-1/K vs 1/2 in
 \code{median_splits}) and has a standard cross-validation
 interpretation, motivated by the open val→test drift observed on
 4/32 binary cells in the discrete-bench memo.
-\code{"median_splits"} slightly reduces gate
-bimodality at small \code{n_val} (SD 0.406 → 0.360 across 10 seeds
-on the evaluation sim) with a small coverage-SD improvement
-(0.094 → 0.086).  Negligible runtime cost (B × cheap grid searches).}
+\code{"median_splits"} repeats the split procedure before taking a
+componentwise median. Assess calibration settings on held-out data.}
 
 \item{gate_splits_B}{integer. Random splits used when
 \code{gate_method = "median_splits"}; default \code{31} (odd so the
@@ -231,15 +257,23 @@ median is well-defined).}
 least 1 cell.  When effective K \code{< 2} (e.g. \code{n_val = 1}),
 the code falls back to a single split.}
 
-\item{safety_floor}{logical. When \code{TRUE} (default), post-training
+\item{safety_floor}{logical. Default \code{FALSE} (it was \code{TRUE}
+from v0.9.1.9002 until 0.11.0.9002). When \code{TRUE}, post-training
 calibration searches a 3-way simplex of BM, GNN, and grand-mean
 candidates. Because the grand-mean corner is always in the grid, the
 selected candidate cannot be worse than that corner on the validation
 cells under the calibration metric. When \code{FALSE}, the v0.9.1
-1-D calibration is used exactly (\code{r_MEAN = 0}).}
+1-D calibration is used exactly (\code{r_MEAN = 0}). The default
+changed because, with Pagel's \eqn{\lambda} now estimated for every
+trait type (see \code{discrete_lambda}), the floor no longer improved
+accuracy in any tested setting; at \eqn{\lambda} of 0 to 0.1 the old
+default was worse than predicting the mean, and on the BIEN plant
+data it changed nothing (\code{docs/dev-log/discrete-lambda/README.md}).
+Set \code{safety_floor = TRUE} to restore the old behaviour.}
 
-\item{phylo_signal_gate}{logical. When \code{TRUE} (default since
-v0.9.1.9003), compute per-trait Pagel's \eqn{\lambda} on
+\item{phylo_signal_gate}{logical. Default \code{FALSE} (it was
+\code{TRUE} from v0.9.1.9003 until 0.11.0.9002; same reasons as
+\code{safety_floor}; set \code{TRUE} to restore). When \code{TRUE}, compute per-trait Pagel's \eqn{\lambda} on
 training-observed cells before fitting; for traits with
 \code{lambda < phylo_signal_threshold}, force
 \code{(r_cal_bm = 0, r_cal_gnn = 0, r_cal_mean = 1)} directly
@@ -260,19 +294,131 @@ selecting K must supply a K-appropriate threshold.}
 
 \item{min_val_cells}{integer. Warn at fit time if any trait has fewer
 than \code{min_val_cells} validation cells available for gate
-calibration and conformal-score estimation.  Default \code{10}: the
-floor of pathological territory, where the conformal quantile
-collapses to \code{max(val_residuals)} and gate calibration becomes
+calibration and conformal-score estimation.  Default \code{20}: with
+fewer than 19 cells the split-conformal level \eqn{n/(n+1)} is below
+0.95; with 38 or fewer cells the conformal score is the largest
+validation residual; and with very few cells gate calibration becomes
 essentially a coin flip between \code{0} and \code{gate_cap}.
 Recommended operational target is \code{n_val >= 20-30} per trait;
 achieve this by increasing \code{missing_frac} or collecting more
 species.  See \strong{Calibration at small n} below.}
 
 \item{lambda_mode}{character. Pagel-lambda mode for the BM baseline.
-\code{"fixed_1"} preserves the default Brownian correlation matrix;
-\code{"estimate"}, \code{"cv"}, and \code{"bayes"} delegate lambda
-handling to the per-column BM path. Passed to
-\code{\link{fit_baseline}} and stored in the fitted model config.}
+\code{"estimate"} (default) fits a per-trait Pagel's lambda on each
+continuous-family (BM-eligible) latent column -- continuous, count,
+proportion, and zi_count magnitude, via the joint MVN /
+threshold-joint baseline's own \code{lambda_cols} machinery when that
+joint path fires, or a per-column re-fit otherwise. Binary, ordinal and
+categorical traits get their own lambda by default
+(\code{discrete_lambda = "estimate"}); the rest of this paragraph
+describes \code{discrete_lambda = "fixed_1"}, where discrete traits
+(binary, categorical, zi gate) AND ordinal have no discrete-trait
+analogue of Pagel's lambda of their own -- there is no lambda_k to
+estimate for them. Under \code{predict_method = "per_column"} (see
+below) they stay fixed at lambda = 1 in every path, matching pre-S3
+behaviour. Under \code{predict_method = "exact"} (and for traits the
+default \code{"auto"} routes to \code{"exact"}) they
+instead share the joint fit's \code{lambda_block} -- the exact
+conditional's covariance model uses ONE shared phylogenetic
+correlation matrix \code{R(lambda_block)} for every column, so the
+Sigma estimate feeding it must itself come from an internally
+consistent init, not a mix of \code{R(1)} for discrete columns and
+\code{R(lambda_k)} for continuous ones (Shinichi's decision,
+docs/dev-log/exact-default/S3-default-report.md). \code{"fixed_1"}
+preserves the pre-lambda Brownian correlation matrix everywhere;
+\code{"cv"} and \code{"bayes"} are alternative per-column estimators
+that force continuous-family columns onto the per-column BM path (no
+joint analogue). When \code{predict_method = "exact"} or
+\code{joint_refine_iter > 0}, the joint (multi-trait) prediction path
+additionally uses the single shared \code{lambda_block} for
+cross-trait computations that need one common phylogenetic
+correlation matrix, never overriding a continuous-family column's own
+estimated lambda_k. Passed to \code{\link{fit_baseline}} and stored in
+the fitted model config. When \code{covariates} are supplied, the
+covariate-aware BM path (\code{bm_impute_col_with_cov()}) accepts a
+numeric lambda or \code{"estimate"}, so \code{lambda_mode \%in\%
+c("estimate", "fixed_1")} reaches it and each covariate-aware
+BM-eligible column gets its own estimated lambda; it does NOT accept
+\code{"cv"} / \code{"bayes"}, which fall back to lambda = 1 for
+BM-eligible columns with a warning from \code{fit_baseline}.}
+
+\item{discrete_lambda}{character, \code{"estimate"} (default) or
+\code{"fixed_1"}. With \code{"estimate"}, the binary, ordinal and
+zero-inflated-count gate liability columns of the threshold-joint
+baseline, and the one-vs-rest column of each categorical class, get
+their own Pagel's lambda, so a weak-signal discrete trait shrinks toward
+its prevalence instead of copying close relatives. \code{"fixed_1"}
+restores the previous behaviour (binary and ordinal at lambda = 1, or at
+the shared joint lambda on the "exact" route; categorical at 1).
+Evidence (simulated Brownian-motion and OU data, n = 100 to 1000, 30\\%
+missing; \code{docs/dev-log/discrete-lambda/README.md}): estimating
+discrete lambda alone added about 0.01 to 0.04 discrete accuracy at Pagel's
+lambda of 0.3 or below; together with \code{safety_floor = FALSE} and
+\code{phylo_signal_gate = FALSE} (also the defaults) the gain was 0.04
+to 0.12, and binary and categorical accuracy matched or beat BACE's.
+Costs: with lambda near 1 and n >= 1000, accuracy -0.002 to -0.005 and
+Brier score +0.010 to +0.016; on AVONET300's categorical traits, Brier
++0.014 to +0.020 with accuracy unchanged or better. Ordinal accuracy
+still trails BACE's at lambda = 0.3. The categorical one-vs-rest lambdas
+are not reported in \code{$lambda_per_trait}.
+Passed to \code{\link{fit_baseline}} and stored in the fitted model
+config.}
+
+\item{joint_solver}{character. Which solver estimates the joint MVN /
+threshold-joint / OVR categorical baselines. \code{"inhouse"}
+(default) is byte-identical to prior releases; \code{"rphylopars"}
+delegates to \code{Rphylopars::phylopars()}'s converged REML fit,
+with automatic fallback to \code{"inhouse"} on failure. Passed to
+\code{\link{fit_baseline}} and stored in the fitted model config.
+See \code{docs/dev-log/2026-08-16-continuous-gap-diagnosis.md}.}
+
+\item{predict_method}{character. Prediction route for the in-house joint
+solver, passed to \code{\link{fit_baseline}}. \code{"auto"} (default,
+S5b) fits the baseline with both the \code{"exact"} and
+\code{"per_column"} routes and picks, per trait, whichever has the
+lower loss on that trait's validation cells (mean squared error on the
+z-scored latent scale for continuous/count/proportion/ordinal/zi_count
+magnitude; mean log-loss for binary/zi_count gate; mean multinomial
+log-loss for categorical), falling back to \code{"exact"} on a tie or
+when fewer than 5 validation cells belong to that trait (including
+when there is no validation split at all). \code{"exact"} uses the
+full cross-trait conditional
+mean and variance of \code{vec(L) ~ MVN(0, Sigma \%x\% R(lambda_block))}
+(Hadfield & Nakagawa, 2010 sparse precision form), each column
+GLS-mean-centred at \code{lambda_block} before the solve; discrete
+liability columns share \code{lambda_block} under this route (see
+\code{lambda_mode} above). Falls back to \code{"per_column"} above
+roughly 20000 unknown cells (roughly 4000 species at 5 traits), on a
+singular/unusable Sigma, or when fewer than 2 joint columns or no
+Henderson sparse precision are available; prints a one-time
+\code{message()} per R session when \code{predict_method} was left at
+its default, or a \code{warning()} every time when \code{"exact"} was
+requested explicitly. \code{"per_column"} retains the original
+per-column conditional prediction route (no cross-trait borrowing in
+the prediction step). None of the three options change covariance
+estimation or the \code{"rphylopars"} solver. The route actually used
+is recorded in \code{$model_config$predict_method_used}
+(\code{"exact"}, \code{"per_column"}, or \code{"auto"}) and, per
+trait, in \code{$model_config$predict_method_by_trait}. Under
+\code{"auto"} with real validation cells, \code{$model_config
+$route_val_n} / \code{$score_val_n} record, per trait, how many of
+its validation cells chose the route versus were reserved for gate
+calibration and conformal scoring (see \code{\link{fit_baseline}}'s
+\code{predict_method} docs); both are \code{NULL} under an explicit
+\code{"exact"}/\code{"per_column"} request.}
+
+\item{joint_refine_iter}{integer, default \code{0L}. Enables
+cross-trait refinement of the joint baseline's cell imputations
+using the estimated Sigma (the in-house solver's \code{max_iter}
+EM cell-refinement; \code{R/joint_mvn_solver.R}). \code{0L} preserves
+current behaviour byte-for-byte. The refinement is guarded: the
+Sigma step must shrink each iteration, or the loop rolls back to the
+last good iterate and sets \code{$diverged}. Assess this opt-in control
+with held-out evaluation on the intended data. Has no effect on any
+trait predicted by the \code{"exact"} route (see
+\code{\link{fit_baseline}}'s \code{predict_method} docs); under the
+default \code{predict_method = "auto"} it therefore only applies to
+traits \code{"auto"} routes to \code{"per_column"}.}
 
 \item{verbose}{logical. Print training progress (default \code{TRUE}).}
 
@@ -291,7 +437,7 @@ refers to the ResNet-style skip connections in the GNN layers, not
 to a statistical residual). For continuous, count, and ordinal traits
 the baseline is Brownian motion (phylogenetic correlation matrix); for binary
 and categorical traits it is phylogenetic label propagation. Supports
-all five trait types via a unified latent space.
+all eight trait types via a unified latent space.
 }
 \details{
 \strong{Blend formulation:}
@@ -330,41 +476,17 @@ toward zero when the GNN correction provides no benefit.
 \section{Calibration at small n}{
 
 
-pigauto's 95\\% intervals are \emph{conformal}, not parametric: the
-interval half-width for each trait is the empirical \code{(1 - alpha)}
-quantile of \eqn{|y - \hat y|} on held-out validation cells.  When the
-number of validation cells per trait (\code{n_val}) is large
-(\eqn{\gtrsim 30}), split-conformal gives near-exact marginal coverage
-under mild exchangeability assumptions.
+Conformal bounds use the empirical \code{(1 - alpha)} quantile of
+\eqn{|y - \hat y|} on held-out validation cells. They are nominal
+held-out diagnostics and do not certify package-wide coverage.
 
-At small \code{n_val} (\eqn{<} 20, and especially \eqn{<} 10) two
-things degrade at once:
-
-\itemize{
-\item The conformal quantile clamps to \code{max(residuals)} because
-the required quantile level exceeds 1.  The score is the single
-largest val residual and has substantial sampling variance across
-fits.
-\item The gate calibration's half-A / half-B split ends up with only
-a few cells per half, so the grid-search winner is essentially
-random between \code{0} and \code{gate_cap}.
-}
-
-Empirically (pigauto simulation harness, n=150 species, 35\\%
-trait_MAR, 10 random seeds), default behaviour produces 92\\% mean
-coverage with per-fit coverage ranging \code{[0.73, 1.00]}.  The mean
-is close to the 95\\% target; the per-fit variance is the issue.
-\code{gate_method = "median_splits"} and \code{conformal_method =
-"bootstrap"} reduce their respective estimator variances but
-empirically do not meaningfully narrow the coverage distribution.
-\strong{Treat the 95\\% intervals as approximate in the small-\code{n}
-regime}; increase \code{missing_frac} (more held-out data for
-calibration) or collect more species if tight per-fit coverage is
-required.
-
-The \code{min_val_cells} warning fires at fit time whenever any trait
-falls below this threshold, so you know when to interpret the
-intervals cautiously.
+Small validation sets make both the residual quantile and gate selection
+unstable. The \code{min_val_cells} warning identifies traits where this is
+especially relevant. \code{conformal_split_val = TRUE} can separate gate
+selection from residual estimation for eligible columns, but it does not
+remove the small-sample limitation. Use \code{cross_validate()} on the
+intended data and report the resulting held-out diagnostics rather than
+treating an interval target as certified.
 }
 
 \examples{

@@ -32,8 +32,10 @@ knitr::opts_chunk$set(
 # df <- avonet300; rownames(df) <- df$Species_Key; df$Species_Key <- NULL
 # 
 # table(df$Migration)              # check the marginal distribution
+# hide <- sample(which(!is.na(df$Migration)), 30L)
+# df$Migration[hide] <- NA
 # result <- impute(df, tree300, verbose = FALSE)
-# table(result$prediction$imputed$Migration)
+# table(result$completed$Migration[hide])
 
 ## ----section2-fix, eval = FALSE-----------------------------------------------
 # set.seed(1L)
@@ -66,7 +68,7 @@ knitr::opts_chunk$set(
 # data(avonet300, tree300)
 # df <- avonet300; rownames(df) <- df$Species_Key; df$Species_Key <- NULL
 # 
-# fit <- impute(df, tree300)$fit
+# fit <- impute(df, tree300, phylo_signal_gate = TRUE)$fit
 # fit$phylo_signal_per_trait
 
 ## ----section5-diag, eval = FALSE----------------------------------------------

@@ -39,7 +39,7 @@
 #' splits <- make_missing_splits(pd$X_scaled, trait_map = pd$trait_map)
 #' fit <- fit_pigauto(pd, tree, splits = splits, epochs = 5L,
 #'                    verbose = FALSE)
-#' eval_df <- evaluate(fit, data = pd)
+#' eval_df <- evaluate(fit)
 #' eval_df[eval_df$metric == "rmse", ]
 #' }
 #' @export
@@ -62,18 +62,18 @@ evaluate <- function(fit, data = NULL, splits = NULL) {
   # Get truth in latent scale
   trait_map <- fit$trait_map
 
-  # Truth in latent scale.  The fit does not store X_scaled directly,
-  # so the original pigauto_data object is required.
+  # Truth in latent scale. Current fits retain X_scaled (Phase G',
+  # 2026-05-01) so evaluate(fit) can score the stored test split
+  # without the original pigauto_data. Older saved fits still need
+  # `data`. An explicit pigauto_data wins when supplied.
   if (!is.null(data)) {
     if (!inherits(data, "pigauto_data")) {
       stop("'data' must be a pigauto_data object.")
     }
     truth_latent <- data$X_scaled
+  } else if (!is.null(fit$X_scaled)) {
+    truth_latent <- fit$X_scaled
   } else {
-    # Attempt to recover truth from the fit object.
-    # The fit does not store X_scaled, so we reconstruct what we can.
-    # evaluate_imputation() was the previous API for this -- but it
-    # required truth.  For the new API, data is strongly recommended.
     stop("'data' is required. Pass the pigauto_data object used for fitting.")
   }
 
@@ -101,6 +101,10 @@ evaluate <- function(fit, data = NULL, splits = NULL) {
   )
 
   # ---- Evaluate baseline predictions if available --------------------------
+  # Always reads the HELD-OUT fit$baseline here, never fit$baseline_full
+  # (the gnn = FALSE production baseline fit on all observed cells): scoring
+  # against test cells must never see a baseline that was itself fit on
+  # those same test cells (docs/dev-log/arc/2026-09-18-gnn-off-contract.md).
   baseline_rows <- NULL
   if (!is.null(fit$baseline)) {
     mu_species <- fit$baseline$mu
@@ -507,9 +511,16 @@ eval_test_cells_legacy <- function(pred_latent, truth_latent,
 #'   default \code{NULL} performs one run using the current RNG stream.
 #' @param epochs number of training epochs.
 #' @param verbose logical.
+#' @param gnn logical. Whether the pigauto arm trains the GNN. Default
+#'   \code{TRUE}, so this function keeps comparing the baseline with the
+#'   GNN-corrected model even though \code{\link{fit_pigauto}} and
+#'   \code{\link{impute}} default to \code{gnn = FALSE}.
 #' @param ... additional arguments passed to \code{\link{fit_pigauto}}.
 #' @return A \code{data.frame} with columns: \code{method}, \code{trait},
 #'   \code{type}, \code{metric}, \code{value}, \code{rep}.
+#' @details The default comparison trains the optional torch GNN. The example
+#'   checks that torch can create a tensor before fitting; it reports a skip
+#'   when the Lantern runtime is unavailable.
 #' @examples
 #' \donttest{
 #' data(avonet300, tree300)
@@ -517,13 +528,23 @@ eval_test_cells_legacy <- function(pred_latent, truth_latent,
 #' traits <- avonet300[match(tree$tip.label, avonet300$Species_Key),
 #'                      c("Mass", "Wing.Length"), drop = FALSE]
 #' rownames(traits) <- tree$tip.label
-#' cmp <- compare_methods(preprocess_traits(traits, tree), tree, seeds = 1L,
-#'                        epochs = 5L, verbose = FALSE)
-#' aggregate(value ~ method + trait + metric, data = cmp, FUN = mean)
+#' torch_ready <- requireNamespace("torch", quietly = TRUE) &&
+#'   isTRUE(tryCatch(torch::torch_is_installed(), error = function(e) FALSE)) &&
+#'   isTRUE(tryCatch({
+#'     probe <- torch::torch_tensor(1)
+#'     as.numeric(probe$item()) == 1
+#'   }, error = function(e) FALSE))
+#' if (torch_ready) {
+#'   cmp <- compare_methods(preprocess_traits(traits, tree), tree, seeds = 1L,
+#'                          epochs = 5L, verbose = FALSE, gnn = TRUE)
+#'   aggregate(value ~ method + trait + metric, data = cmp, FUN = mean)
+#' } else {
+#'   message("Skipping GNN comparison: install torch and its Lantern runtime.")
+#' }
 #' }
 #' @export
 compare_methods <- function(data, tree, splits = NULL, seeds = NULL,
-                            epochs = 500L, verbose = TRUE, ...) {
+                            epochs = 500L, verbose = TRUE, gnn = TRUE, ...) {
   if (!inherits(data, "pigauto_data")) {
     stop("'data' must be a pigauto_data object.")
   }
@@ -569,6 +590,7 @@ compare_methods <- function(data, tree, splits = NULL, seeds = NULL,
       epochs  = as.integer(epochs),
       verbose = verbose,
       seed    = s,
+      gnn     = gnn,
       ...
     )
 
@@ -629,10 +651,15 @@ summary.pigauto_fit <- function(object, ..., data = NULL) {
   n_epochs <- if (nrow(object$history) > 0L) max(object$history$epoch) else 0L
   cat(sprintf("Species: %d | Traits: %d | Epochs: %d\n",
               n_species, n_traits, n_epochs))
-  cat(sprintf("Architecture: hidden_dim=%d, k_eigen=%d, n_gnn=%d, attention=%s\n",
-              cfg$hidden_dim, cfg$k_eigen,
-              cfg$n_gnn_layers %||% 1L,
-              if (isTRUE(cfg$use_attention)) "TRUE" else "FALSE"))
+  if (!isFALSE(cfg$gnn)) {
+    cat(sprintf("Architecture: hidden_dim=%d, k_eigen=%d, n_gnn=%d, attention=%s\n",
+                cfg$hidden_dim, cfg$k_eigen,
+                cfg$n_gnn_layers %||% 1L,
+                if (isTRUE(cfg$use_attention)) "TRUE" else "FALSE"))
+  }
+  if (isFALSE(cfg$gnn)) {
+    cat("GNN: off (baseline only)\n")
+  }
 
   if (!is.null(trait_map)) {
     types <- vapply(trait_map, "[[", character(1), "type")

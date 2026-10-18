@@ -425,6 +425,11 @@ class; <code>proportion</code>, <code>zi_count</code>, and
 eight share the same latent space — the phylogenetic baseline and GNN
 correction both operate in this space, and type-specific logic appears
 only at encoding, loss computation, and decoding.</p>
+<p>Before fitting a mixed table, use
+<code>check_pigauto(traits, tree)</code>. Its trait table records the
+detected type, declaration source, usable matched rows, and copy-ready
+corrections; its species report distinguishes matched, data-only, and
+tree-only identities.</p>
 </div>
 <div id="synthetic-example" class="section level2">
 <h2>Synthetic example</h2>
@@ -450,12 +455,13 @@ only at encoding, loss computation, and decoding.</p>
 <p><code>preprocess_traits()</code> auto-detects column types from R
 classes:</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>pd <span class="ot">&lt;-</span> <span class="fu">preprocess_traits</span>(traits, tree)</span>
-<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="fu">print</span>(pd)</span>
-<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a><span class="co">#&gt; pigauto_data</span></span>
-<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a><span class="co">#&gt;   Species: 60 </span></span>
-<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a><span class="co">#&gt;   Traits:  5 </span></span>
-<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a><span class="co">#&gt;   Types:   binary=1, categorical=1, continuous=1, count=1, ordinal=1 </span></span>
-<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a><span class="co">#&gt;   Latent columns: 7</span></span></code></pre></div>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="co">#&gt; Auto-detected trait type &quot;count&quot; (log1p-encoded) for integer column(s): clutch. If any is a continuous measurement stored as whole numbers (common after read.csv), override it: trait_types = c(clutch = &quot;continuous&quot;).</span></span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a><span class="fu">print</span>(pd)</span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a><span class="co">#&gt; pigauto_data</span></span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a><span class="co">#&gt;   Species: 60 </span></span>
+<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a><span class="co">#&gt;   Traits:  5 </span></span>
+<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a><span class="co">#&gt;   Types:   binary=1, categorical=1, continuous=1, count=1, ordinal=1 </span></span>
+<span id="cb2-8"><a href="#cb2-8" tabindex="-1"></a><span class="co">#&gt;   Latent columns: 7</span></span></code></pre></div>
 <p>The <code>trait_map</code> records each trait’s type, levels, latent
 column indices, and normalisation parameters:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a><span class="fu">str</span>(pd<span class="sc">$</span>trait_map, <span class="at">max.level =</span> <span class="dv">1</span>)</span>
@@ -511,36 +517,38 @@ for discrete-family columns:</p>
 <span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a><span class="fu">dim</span>(bl<span class="sc">$</span>mu)</span>
 <span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a><span class="co">#&gt; [1] 60  7</span></span></code></pre></div>
 </div>
-<div id="training" class="section level2">
-<h2>Training</h2>
-<p><code>fit_pigauto()</code> uses type-specific losses and trait-level
-corruption masking automatically when a <code>trait_map</code> is
-present:</p>
+<div id="fitting" class="section level2">
+<h2>Fitting</h2>
+<p><code>fit_pigauto()</code> calibrates the phylogenetic baseline for
+every trait type on the validation cells and computes the conformal
+intervals. With the default <code>gnn = FALSE</code> no network is
+trained. With <code>gnn = TRUE</code> it also trains the GNN correction,
+using type-specific losses and trait-level corruption masking when a
+<code>trait_map</code> is present.</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">fit_pigauto</span>(</span>
 <span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a>  pd, tree,</span>
 <span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a>  <span class="at">splits =</span> spl,</span>
-<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a>  <span class="at">epochs =</span> <span class="dv">200</span><span class="dt">L</span>,</span>
-<span id="cb6-5"><a href="#cb6-5" tabindex="-1"></a>  <span class="at">eval_every =</span> <span class="dv">50</span><span class="dt">L</span>,</span>
-<span id="cb6-6"><a href="#cb6-6" tabindex="-1"></a>  <span class="at">patience =</span> <span class="dv">5</span><span class="dt">L</span>,</span>
-<span id="cb6-7"><a href="#cb6-7" tabindex="-1"></a>  <span class="at">verbose =</span> <span class="cn">FALSE</span>,</span>
-<span id="cb6-8"><a href="#cb6-8" tabindex="-1"></a>  <span class="at">seed =</span> <span class="dv">1</span></span>
-<span id="cb6-9"><a href="#cb6-9" tabindex="-1"></a>)</span>
-<span id="cb6-10"><a href="#cb6-10" tabindex="-1"></a><span class="co">#&gt; Warning: phylo_signal_gate requires the &#39;phytools&#39; package; returning NA for</span></span>
-<span id="cb6-11"><a href="#cb6-11" tabindex="-1"></a><span class="co">#&gt; all traits.</span></span>
-<span id="cb6-12"><a href="#cb6-12" tabindex="-1"></a><span class="co">#&gt; Warning: Small validation set for 5 trait(s): mass (n=2), clutch (n=4), migr</span></span>
-<span id="cb6-13"><a href="#cb6-13" tabindex="-1"></a><span class="co">#&gt; (n=3), diet (n=3), threat (n=3). Calibrated gate and conformal scores will be</span></span>
-<span id="cb6-14"><a href="#cb6-14" tabindex="-1"></a><span class="co">#&gt; noisy; coverage may deviate from the 95%% target. See `?fit_pigauto` under</span></span>
-<span id="cb6-15"><a href="#cb6-15" tabindex="-1"></a><span class="co">#&gt; &#39;Calibration at small n&#39; for smoothing options.</span></span>
-<span id="cb6-16"><a href="#cb6-16" tabindex="-1"></a><span class="fu">print</span>(fit)</span>
-<span id="cb6-17"><a href="#cb6-17" tabindex="-1"></a><span class="co">#&gt; pigauto_fit</span></span>
-<span id="cb6-18"><a href="#cb6-18" tabindex="-1"></a><span class="co">#&gt;   Species : 60 </span></span>
-<span id="cb6-19"><a href="#cb6-19" tabindex="-1"></a><span class="co">#&gt;   Traits  : 5 -- mass, clutch, migr, diet, threat </span></span>
-<span id="cb6-20"><a href="#cb6-20" tabindex="-1"></a><span class="co">#&gt;   Types   : binary=1, categorical=1, continuous=1, count=1, ordinal=1 </span></span>
-<span id="cb6-21"><a href="#cb6-21" tabindex="-1"></a><span class="co">#&gt;   Architecture: hidden_dim = 64 | k_eigen = 4 </span></span>
-<span id="cb6-22"><a href="#cb6-22" tabindex="-1"></a><span class="co">#&gt;   Best val loss : 1.3821 </span></span>
-<span id="cb6-23"><a href="#cb6-23" tabindex="-1"></a><span class="co">#&gt;   Test loss     : 1.1715 </span></span>
-<span id="cb6-24"><a href="#cb6-24" tabindex="-1"></a><span class="co">#&gt;   Gate calibration: yes</span></span>
-<span id="cb6-25"><a href="#cb6-25" tabindex="-1"></a><span class="co">#&gt;   Conformal scores: 3 traits</span></span></code></pre></div>
+<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a>  <span class="at">verbose =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb6-5"><a href="#cb6-5" tabindex="-1"></a>  <span class="at">seed =</span> <span class="dv">1</span></span>
+<span id="cb6-6"><a href="#cb6-6" tabindex="-1"></a>)</span>
+<span id="cb6-7"><a href="#cb6-7" tabindex="-1"></a><span class="co">#&gt; Warning: Small validation set for 5 trait(s): mass (n=2), clutch (n=4), migr</span></span>
+<span id="cb6-8"><a href="#cb6-8" tabindex="-1"></a><span class="co">#&gt; (n=3), diet (n=3), threat (n=3). Calibrated gate and conformal scores will be</span></span>
+<span id="cb6-9"><a href="#cb6-9" tabindex="-1"></a><span class="co">#&gt; noisy for these trait(s). 95% split-conformal coverage is NOT achievable for 3</span></span>
+<span id="cb6-10"><a href="#cb6-10" tabindex="-1"></a><span class="co">#&gt; trait(s) with fewer than 19 validation cells (mass (n=2), clutch (n=4), threat</span></span>
+<span id="cb6-11"><a href="#cb6-11" tabindex="-1"></a><span class="co">#&gt; (n=3)): the achievable ceiling is n_val / (n_val + 1), which only reaches 0.95</span></span>
+<span id="cb6-12"><a href="#cb6-12" tabindex="-1"></a><span class="co">#&gt; at n_val &gt;= 19. See `?fit_pigauto` under &#39;Calibration at small n&#39; for smoothing</span></span>
+<span id="cb6-13"><a href="#cb6-13" tabindex="-1"></a><span class="co">#&gt; options.</span></span>
+<span id="cb6-14"><a href="#cb6-14" tabindex="-1"></a><span class="fu">print</span>(fit)</span>
+<span id="cb6-15"><a href="#cb6-15" tabindex="-1"></a><span class="co">#&gt; pigauto_fit</span></span>
+<span id="cb6-16"><a href="#cb6-16" tabindex="-1"></a><span class="co">#&gt;   GNN     : off (baseline only)</span></span>
+<span id="cb6-17"><a href="#cb6-17" tabindex="-1"></a><span class="co">#&gt;   Species : 60 </span></span>
+<span id="cb6-18"><a href="#cb6-18" tabindex="-1"></a><span class="co">#&gt;   Traits  : 5 -- mass, clutch, migr, diet, threat </span></span>
+<span id="cb6-19"><a href="#cb6-19" tabindex="-1"></a><span class="co">#&gt;   Types   : binary=1, categorical=1, continuous=1, count=1, ordinal=1 </span></span>
+<span id="cb6-20"><a href="#cb6-20" tabindex="-1"></a><span class="co">#&gt;   Architecture: hidden_dim = 64 | k_eigen = 4 </span></span>
+<span id="cb6-21"><a href="#cb6-21" tabindex="-1"></a><span class="co">#&gt;   Best val loss : 1.169 </span></span>
+<span id="cb6-22"><a href="#cb6-22" tabindex="-1"></a><span class="co">#&gt;   Test loss     : 1.1277 </span></span>
+<span id="cb6-23"><a href="#cb6-23" tabindex="-1"></a><span class="co">#&gt;   Gate calibration: yes</span></span>
+<span id="cb6-24"><a href="#cb6-24" tabindex="-1"></a><span class="co">#&gt;   Conformal scores: 3 traits</span></span></code></pre></div>
 </div>
 <div id="prediction-and-decoding" class="section level2">
 <h2>Prediction and decoding</h2>
@@ -548,85 +556,69 @@ present:</p>
 types:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>pred <span class="ot">&lt;-</span> <span class="fu">predict</span>(fit, <span class="at">return_se =</span> <span class="cn">TRUE</span>)</span>
 <span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a><span class="fu">head</span>(pred<span class="sc">$</span>imputed)</span>
-<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a><span class="co">#&gt;       mass clutch migr diet threat</span></span>
-<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a><span class="co">#&gt; t58 17.909      4  yes carn     VU</span></span>
-<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a><span class="co">#&gt; t8  17.909      4  yes carn     VU</span></span>
-<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a><span class="co">#&gt; t36 17.909      4  yes carn     VU</span></span>
-<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a><span class="co">#&gt; t4  17.909      4  yes carn     VU</span></span>
-<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a><span class="co">#&gt; t22 17.909      4   no carn     VU</span></span>
-<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a><span class="co">#&gt; t18 17.909      4   no carn     VU</span></span></code></pre></div>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a><span class="co">#&gt;          mass clutch migr diet threat</span></span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a><span class="co">#&gt; t58  9.518026      4  yes carn     LC</span></span>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a><span class="co">#&gt; t8   9.629026      5  yes carn     LC</span></span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a><span class="co">#&gt; t36 21.377761      3  yes herb     VU</span></span>
+<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a><span class="co">#&gt; t4  12.202983      8  yes carn     LC</span></span>
+<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a><span class="co">#&gt; t22 20.067241      4   no herb     VU</span></span>
+<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a><span class="co">#&gt; t18 16.213927      4   no omni     EN</span></span></code></pre></div>
 <p>For binary and categorical traits, class probabilities are
 available:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a><span class="co"># Binary: probability of &quot;yes&quot;</span></span>
 <span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a><span class="fu">head</span>(pred<span class="sc">$</span>probabilities<span class="sc">$</span>migr)</span>
-<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a><span class="co">#&gt; [1] 0.5179941 0.7875313 0.7875313 0.7875313 0.2124687 0.2124687</span></span>
-<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a></span>
-<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a><span class="co"># Categorical: probability of each diet class</span></span>
-<span id="cb8-6"><a href="#cb8-6" tabindex="-1"></a><span class="fu">head</span>(pred<span class="sc">$</span>probabilities<span class="sc">$</span>diet)</span>
-<span id="cb8-7"><a href="#cb8-7" tabindex="-1"></a><span class="co">#&gt;          carn      herb      omni</span></span>
-<span id="cb8-8"><a href="#cb8-8" tabindex="-1"></a><span class="co">#&gt; t58 0.4558713 0.2464169 0.2977118</span></span>
-<span id="cb8-9"><a href="#cb8-9" tabindex="-1"></a><span class="co">#&gt; t8  0.4558713 0.2464169 0.2977118</span></span>
-<span id="cb8-10"><a href="#cb8-10" tabindex="-1"></a><span class="co">#&gt; t36 0.4558713 0.2464169 0.2977118</span></span>
-<span id="cb8-11"><a href="#cb8-11" tabindex="-1"></a><span class="co">#&gt; t4  0.4558713 0.2464169 0.2977118</span></span>
-<span id="cb8-12"><a href="#cb8-12" tabindex="-1"></a><span class="co">#&gt; t22 0.4558713 0.2464169 0.2977118</span></span>
-<span id="cb8-13"><a href="#cb8-13" tabindex="-1"></a><span class="co">#&gt; t18 0.4558713 0.2464169 0.2977118</span></span></code></pre></div>
-<p>The SE matrix provides type-appropriate uncertainty:</p>
+<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a><span class="co">#&gt;       t58        t8       t36        t4       t22       t18 </span></span>
+<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a><span class="co">#&gt; 0.7875313 0.7875313 0.7875313 0.7875313 0.2124687 0.2124687</span></span>
+<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a></span>
+<span id="cb8-6"><a href="#cb8-6" tabindex="-1"></a><span class="co"># Categorical: probability of each diet class</span></span>
+<span id="cb8-7"><a href="#cb8-7" tabindex="-1"></a><span class="fu">head</span>(pred<span class="sc">$</span>probabilities<span class="sc">$</span>diet)</span>
+<span id="cb8-8"><a href="#cb8-8" tabindex="-1"></a><span class="co">#&gt;          carn      herb      omni</span></span>
+<span id="cb8-9"><a href="#cb8-9" tabindex="-1"></a><span class="co">#&gt; t58 0.6495271 0.1752365 0.1752365</span></span>
+<span id="cb8-10"><a href="#cb8-10" tabindex="-1"></a><span class="co">#&gt; t8  0.6495271 0.1752365 0.1752365</span></span>
+<span id="cb8-11"><a href="#cb8-11" tabindex="-1"></a><span class="co">#&gt; t36 0.1752365 0.6495271 0.1752365</span></span>
+<span id="cb8-12"><a href="#cb8-12" tabindex="-1"></a><span class="co">#&gt; t4  0.6495271 0.1752365 0.1752365</span></span>
+<span id="cb8-13"><a href="#cb8-13" tabindex="-1"></a><span class="co">#&gt; t22 0.1752365 0.6495271 0.1752365</span></span>
+<span id="cb8-14"><a href="#cb8-14" tabindex="-1"></a><span class="co">#&gt; t18 0.1752365 0.1752365 0.6495271</span></span></code></pre></div>
+<p>The SE matrix provides type-appropriate uncertainty (see the
+uncertainty-mechanisms table in the GNN architecture vignette for what
+each column’s SE does and does not guarantee):</p>
 <div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a><span class="fu">head</span>(pred<span class="sc">$</span>se)</span>
-<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a><span class="co">#&gt;     mass clutch      migr      diet    threat</span></span>
-<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a><span class="co">#&gt; t58    0      0 0.4820059 0.5441287 0.4998422</span></span>
-<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a><span class="co">#&gt; t8     0      0 0.2124687 0.5441287 0.4735485</span></span>
-<span id="cb9-5"><a href="#cb9-5" tabindex="-1"></a><span class="co">#&gt; t36    0      0 0.2124687 0.5441287 0.4902633</span></span>
-<span id="cb9-6"><a href="#cb9-6" tabindex="-1"></a><span class="co">#&gt; t4     0      0 0.2124687 0.5441287 0.4746017</span></span>
-<span id="cb9-7"><a href="#cb9-7" tabindex="-1"></a><span class="co">#&gt; t22    0      0 0.2124687 0.5441287 0.4892949</span></span>
-<span id="cb9-8"><a href="#cb9-8" tabindex="-1"></a><span class="co">#&gt; t18    0      0 0.2124687 0.5441287 0.4497299</span></span></code></pre></div>
+<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a><span class="co">#&gt;     mass clutch      migr      diet threat</span></span>
+<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a><span class="co">#&gt; t58    0      0 0.2124687 0.3504729      0</span></span>
+<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a><span class="co">#&gt; t8     0      0 0.2124687 0.3504729      0</span></span>
+<span id="cb9-5"><a href="#cb9-5" tabindex="-1"></a><span class="co">#&gt; t36    0      0 0.2124687 0.3504729      0</span></span>
+<span id="cb9-6"><a href="#cb9-6" tabindex="-1"></a><span class="co">#&gt; t4     0      0 0.2124687 0.3504729      0</span></span>
+<span id="cb9-7"><a href="#cb9-7" tabindex="-1"></a><span class="co">#&gt; t22    0      0 0.2124687 0.3504729      0</span></span>
+<span id="cb9-8"><a href="#cb9-8" tabindex="-1"></a><span class="co">#&gt; t18    0      0 0.2124687 0.3504729      0</span></span></code></pre></div>
 </div>
 <div id="evaluation" class="section level2">
 <h2>Evaluation</h2>
 <p><code>evaluate_imputation()</code> dispatches type-specific
 metrics:</p>
 <div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a>ev <span class="ot">&lt;-</span> <span class="fu">evaluate_imputation</span>(pred, pd<span class="sc">$</span>X_scaled, spl)</span>
-<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a><span class="co">#&gt; Warning in stats::cor(t_j[ok], p_j[ok]): the standard deviation is zero</span></span>
-<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a><span class="co">#&gt; Warning in stats::cor(t_j[ok], p_j[ok]): the standard deviation is zero</span></span>
-<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a><span class="co">#&gt; Warning in stats::cor(t_j[ok], p_j[ok], method = &quot;spearman&quot;): the standard</span></span>
-<span id="cb10-5"><a href="#cb10-5" tabindex="-1"></a><span class="co">#&gt; deviation is zero</span></span>
-<span id="cb10-6"><a href="#cb10-6" tabindex="-1"></a><span class="co">#&gt; Warning in stats::cor(t_j[ok], p_j[ok]): the standard deviation is zero</span></span>
-<span id="cb10-7"><a href="#cb10-7" tabindex="-1"></a><span class="co">#&gt; Warning in stats::cor(t_j[ok], p_j[ok]): the standard deviation is zero</span></span>
-<span id="cb10-8"><a href="#cb10-8" tabindex="-1"></a><span class="co">#&gt; Warning in stats::cor(t_j[ok], p_j[ok], method = &quot;spearman&quot;): the standard</span></span>
-<span id="cb10-9"><a href="#cb10-9" tabindex="-1"></a><span class="co">#&gt; deviation is zero</span></span>
-<span id="cb10-10"><a href="#cb10-10" tabindex="-1"></a><span class="fu">print</span>(ev)</span>
-<span id="cb10-11"><a href="#cb10-11" tabindex="-1"></a><span class="co">#&gt;    split  trait        type  n      rmse pearson_r coverage_95       mae</span></span>
-<span id="cb10-12"><a href="#cb10-12" tabindex="-1"></a><span class="co">#&gt; 1    val   mass  continuous  2 0.6996585        NA           1        NA</span></span>
-<span id="cb10-13"><a href="#cb10-13" tabindex="-1"></a><span class="co">#&gt; 2    val clutch       count  4 1.0938335        NA          NA 0.9784612</span></span>
-<span id="cb10-14"><a href="#cb10-14" tabindex="-1"></a><span class="co">#&gt; 3    val   migr      binary  3        NA        NA          NA        NA</span></span>
-<span id="cb10-15"><a href="#cb10-15" tabindex="-1"></a><span class="co">#&gt; 4    val   diet categorical  3        NA        NA          NA        NA</span></span>
-<span id="cb10-16"><a href="#cb10-16" tabindex="-1"></a><span class="co">#&gt; 5    val threat     ordinal  3 0.6770739        NA          NA        NA</span></span>
-<span id="cb10-17"><a href="#cb10-17" tabindex="-1"></a><span class="co">#&gt; 6   test   mass  continuous 13 0.9332707        NA           1        NA</span></span>
-<span id="cb10-18"><a href="#cb10-18" tabindex="-1"></a><span class="co">#&gt; 7   test clutch       count 10 0.7248662        NA          NA 0.6104951</span></span>
-<span id="cb10-19"><a href="#cb10-19" tabindex="-1"></a><span class="co">#&gt; 8   test   migr      binary 10        NA        NA          NA        NA</span></span>
-<span id="cb10-20"><a href="#cb10-20" tabindex="-1"></a><span class="co">#&gt; 9   test   diet categorical  6        NA        NA          NA        NA</span></span>
-<span id="cb10-21"><a href="#cb10-21" tabindex="-1"></a><span class="co">#&gt; 10  test threat     ordinal  6 1.1046670        NA          NA        NA</span></span>
-<span id="cb10-22"><a href="#cb10-22" tabindex="-1"></a><span class="co">#&gt;    spearman_rho  accuracy     brier zero_accuracy aitchison rmse_clr</span></span>
-<span id="cb10-23"><a href="#cb10-23" tabindex="-1"></a><span class="co">#&gt; 1            NA        NA        NA            NA        NA       NA</span></span>
-<span id="cb10-24"><a href="#cb10-24" tabindex="-1"></a><span class="co">#&gt; 2            NA        NA        NA            NA        NA       NA</span></span>
-<span id="cb10-25"><a href="#cb10-25" tabindex="-1"></a><span class="co">#&gt; 3            NA 0.6666667 0.2169137            NA        NA       NA</span></span>
-<span id="cb10-26"><a href="#cb10-26" tabindex="-1"></a><span class="co">#&gt; 4            NA 0.3333333        NA            NA        NA       NA</span></span>
-<span id="cb10-27"><a href="#cb10-27" tabindex="-1"></a><span class="co">#&gt; 5            NA        NA        NA            NA        NA       NA</span></span>
-<span id="cb10-28"><a href="#cb10-28" tabindex="-1"></a><span class="co">#&gt; 6            NA        NA        NA            NA        NA       NA</span></span>
-<span id="cb10-29"><a href="#cb10-29" tabindex="-1"></a><span class="co">#&gt; 7            NA        NA        NA            NA        NA       NA</span></span>
-<span id="cb10-30"><a href="#cb10-30" tabindex="-1"></a><span class="co">#&gt; 8            NA 0.6000000 0.2472688            NA        NA       NA</span></span>
-<span id="cb10-31"><a href="#cb10-31" tabindex="-1"></a><span class="co">#&gt; 9            NA 0.1666667        NA            NA        NA       NA</span></span>
-<span id="cb10-32"><a href="#cb10-32" tabindex="-1"></a><span class="co">#&gt; 10           NA        NA        NA            NA        NA       NA</span></span>
-<span id="cb10-33"><a href="#cb10-33" tabindex="-1"></a><span class="co">#&gt;    simplex_mae</span></span>
-<span id="cb10-34"><a href="#cb10-34" tabindex="-1"></a><span class="co">#&gt; 1           NA</span></span>
-<span id="cb10-35"><a href="#cb10-35" tabindex="-1"></a><span class="co">#&gt; 2           NA</span></span>
-<span id="cb10-36"><a href="#cb10-36" tabindex="-1"></a><span class="co">#&gt; 3           NA</span></span>
-<span id="cb10-37"><a href="#cb10-37" tabindex="-1"></a><span class="co">#&gt; 4           NA</span></span>
-<span id="cb10-38"><a href="#cb10-38" tabindex="-1"></a><span class="co">#&gt; 5           NA</span></span>
-<span id="cb10-39"><a href="#cb10-39" tabindex="-1"></a><span class="co">#&gt; 6           NA</span></span>
-<span id="cb10-40"><a href="#cb10-40" tabindex="-1"></a><span class="co">#&gt; 7           NA</span></span>
-<span id="cb10-41"><a href="#cb10-41" tabindex="-1"></a><span class="co">#&gt; 8           NA</span></span>
-<span id="cb10-42"><a href="#cb10-42" tabindex="-1"></a><span class="co">#&gt; 9           NA</span></span>
-<span id="cb10-43"><a href="#cb10-43" tabindex="-1"></a><span class="co">#&gt; 10          NA</span></span></code></pre></div>
+<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a><span class="fu">print</span>(ev)</span>
+<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a><span class="co">#&gt;    split  trait        type  n rmse pearson_r coverage_95 mae spearman_rho</span></span>
+<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a><span class="co">#&gt; 1    val   mass  continuous  2    0         1           1  NA           NA</span></span>
+<span id="cb10-5"><a href="#cb10-5" tabindex="-1"></a><span class="co">#&gt; 2    val clutch       count  4    0         1          NA   0           NA</span></span>
+<span id="cb10-6"><a href="#cb10-6" tabindex="-1"></a><span class="co">#&gt; 3    val   migr      binary  3   NA        NA          NA  NA           NA</span></span>
+<span id="cb10-7"><a href="#cb10-7" tabindex="-1"></a><span class="co">#&gt; 4    val   diet categorical  3   NA        NA          NA  NA           NA</span></span>
+<span id="cb10-8"><a href="#cb10-8" tabindex="-1"></a><span class="co">#&gt; 5    val threat     ordinal  3    0        NA          NA  NA            1</span></span>
+<span id="cb10-9"><a href="#cb10-9" tabindex="-1"></a><span class="co">#&gt; 6   test   mass  continuous 13    0         1           1  NA           NA</span></span>
+<span id="cb10-10"><a href="#cb10-10" tabindex="-1"></a><span class="co">#&gt; 7   test clutch       count 10    0         1          NA   0           NA</span></span>
+<span id="cb10-11"><a href="#cb10-11" tabindex="-1"></a><span class="co">#&gt; 8   test   migr      binary 10   NA        NA          NA  NA           NA</span></span>
+<span id="cb10-12"><a href="#cb10-12" tabindex="-1"></a><span class="co">#&gt; 9   test   diet categorical  6   NA        NA          NA  NA           NA</span></span>
+<span id="cb10-13"><a href="#cb10-13" tabindex="-1"></a><span class="co">#&gt; 10  test threat     ordinal  6    0        NA          NA  NA            1</span></span>
+<span id="cb10-14"><a href="#cb10-14" tabindex="-1"></a><span class="co">#&gt;    accuracy      brier zero_accuracy aitchison rmse_clr simplex_mae</span></span>
+<span id="cb10-15"><a href="#cb10-15" tabindex="-1"></a><span class="co">#&gt; 1        NA         NA            NA        NA       NA          NA</span></span>
+<span id="cb10-16"><a href="#cb10-16" tabindex="-1"></a><span class="co">#&gt; 2        NA         NA            NA        NA       NA          NA</span></span>
+<span id="cb10-17"><a href="#cb10-17" tabindex="-1"></a><span class="co">#&gt; 3         1 0.04514297            NA        NA       NA          NA</span></span>
+<span id="cb10-18"><a href="#cb10-18" tabindex="-1"></a><span class="co">#&gt; 4         1         NA            NA        NA       NA          NA</span></span>
+<span id="cb10-19"><a href="#cb10-19" tabindex="-1"></a><span class="co">#&gt; 5        NA         NA            NA        NA       NA          NA</span></span>
+<span id="cb10-20"><a href="#cb10-20" tabindex="-1"></a><span class="co">#&gt; 6        NA         NA            NA        NA       NA          NA</span></span>
+<span id="cb10-21"><a href="#cb10-21" tabindex="-1"></a><span class="co">#&gt; 7        NA         NA            NA        NA       NA          NA</span></span>
+<span id="cb10-22"><a href="#cb10-22" tabindex="-1"></a><span class="co">#&gt; 8         1 0.04514297            NA        NA       NA          NA</span></span>
+<span id="cb10-23"><a href="#cb10-23" tabindex="-1"></a><span class="co">#&gt; 9         1         NA            NA        NA       NA          NA</span></span>
+<span id="cb10-24"><a href="#cb10-24" tabindex="-1"></a><span class="co">#&gt; 10       NA         NA            NA        NA       NA          NA</span></span></code></pre></div>
 </div>
 <div id="experimental-analysis-aware-multiple-imputation" class="section level2">
 <h2>Experimental analysis-aware multiple imputation</h2>
@@ -667,8 +659,12 @@ correlations, BLUPs/conditional modes, and latent loadings are
 unsupported.</p>
 <p>For prediction diagnostics, the lower-level
 <code>predict(fit, n_imputations = 5L)</code> interface returns
-stochastic datasets. These are not supported for downstream
-inference.</p>
+stochastic datasets. These are not supported for downstream inference.
+The analysis-aware <code>multi_impute_analysis()</code> route admits its
+own narrow class of objects to <code>with_imputations()</code> and
+<code>pool_mi()</code>; the posterior route from
+<code>multi_impute()</code> supports the separately documented
+continuous-trait analyses.</p>
 </div>
 
 

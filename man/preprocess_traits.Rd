@@ -54,7 +54,9 @@ observed values are positive).  Set to \code{character(0)} to disable.}
 \item{log_transform}{logical.  Legacy parameter: if \code{TRUE} and
 \code{log_cols} is \code{NULL}, log-transform all continuous traits
 with all-positive values.  Overridden by \code{log_cols} when both
-are supplied.}
+are supplied.  Traits already on a log scale should not be logged
+again: set \code{log_transform = FALSE} or leave them out of
+\code{log_cols} (see \code{\link{impute}}).}
 
 \item{center}{logical. Subtract column means for continuous/count/ordinal?
 Default \code{TRUE}.}
@@ -65,8 +67,14 @@ Default \code{TRUE}.}
 \item{covariates}{data.frame or numeric matrix of environmental covariates.
 Covariates are conditioners: they inform imputation but are not themselves
 imputed, so they must be \strong{fully observed} (no NAs — if a variable
-has missing values, put it in \code{traits} instead).  Must have the same
-number of rows as \code{traits} after alignment to the tree.
+has missing values, put it in \code{traits} instead).  Rows are aligned
+to the same species / observation order as \code{X_scaled} after traits
+are matched to the tree.  Single-obs: rownames should match
+\code{tree$tip.label} (they are reordered to tip order).  Multi-obs:
+include the same \code{species_col} to match observation rows by species
+identity.  Unnamed covariates are assumed to share the input-row order of
+\code{traits} and receive the same drop / reorder.  Matching
+\code{nrow} alone is not enough — unmatched species names are an error.
 \describe{
 \item{Numeric / integer columns}{z-scored automatically.}
 \item{Factor / ordered columns}{one-hot encoded (K binary columns per
