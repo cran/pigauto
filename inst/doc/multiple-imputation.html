@@ -344,18 +344,78 @@ models</h1>
 
 <p>This article shows how to carry imputation uncertainty into a
 downstream model: impute the missing cells <code>m</code> times, fit the
-same model to each completed dataset, and combine the fits. The chunks
-are not evaluated when the article is built because the posterior
-sampler takes minutes. They were run end to end once with shortened
-sampler chains.</p>
+same model to each completed dataset, and combine the fits. The code
+examples are not run during site builds because posterior sampling can
+take several minutes. A successful site build therefore does not verify
+that these examples run.</p>
+<blockquote>
+<p><strong>Read this before using pooled estimates.</strong> The
+posterior route is implemented for a narrow set of analyses, but the
+registered validation found no supported result in 44 tested inferential
+rows: 12 failed and 32 were indeterminate (the simulations were too
+imprecise to decide whether their criteria were met). These rows include
+complete-data controls and cover only the frozen simulation settings.
+Within that total, five of eight posterior slope regimes failed and
+three were indeterminate. Software eligibility is not evidence that an
+analysis is validated. See the <a href="validation-results.html#inferential-results">registered
+inferential results</a>.</p>
+</blockquote>
+<div id="what-to-score" class="section level2">
+<h2>What to score</h2>
+<p>A point prediction and a draw answer different questions. To assess
+point prediction, hide known values before fitting and compare
+<code>pooled_point</code> with the held-out truth using an appropriate
+metric, such as RMSE or correlation for continuous traits. A single
+completed dataset also contains draw-to-draw variation, so its point
+error combines prediction error and that variation. A lower error for
+<code>pooled_point</code> is not cheating; it evaluates a different
+target. For uncertainty, assess the predictive distribution using
+coverage and width or a proper distributional score on held-out values.
+For downstream inference, assess the estimand and its interval across
+replicated datasets; point accuracy alone cannot establish valid
+inference.</p>
+<p>A single <code>impute()</code> completion is useful for point
+prediction but treating its filled values as observed in a subsequent
+analysis ignores imputation uncertainty and can also change estimates.
+The posterior route provides <code>pooled_point</code> by decoding the
+mean latent draw, and <code>se</code> from decoded retained posterior
+predictive draws. <code>posterior$cell_interval</code> gives per-cell
+intervals and medians from those draws; these summaries need not be
+calculated from only the <code>m</code> returned datasets. The posterior
+parameters are in <code>posterior$params</code>. Model assumptions and
+convergence remain relevant, and software eligibility does not establish
+inferential validity.</p>
+</div>
 <div id="which-imputations-can-be-pooled" class="section level2">
 <h2>Which imputations can be pooled</h2>
+<div id="choose-a-route" class="section level3">
+<h3>Choose a route</h3>
+<ul>
+<li><strong>You want to fit a downstream model to several completed
+datasets.</strong> If continuous traits are missing, the posterior route
+may be eligible only with one row per species, no covariates, and an
+analysis meeting the conditions below. Its inferential validity has not
+been established.</li>
+<li><strong>One continuous predictor is missing, while the outcome and
+other model variables are complete.</strong> If missingness is at random
+(MAR), see the separate experimental <a href="../reference/multi_impute_analysis.html"><code>multi_impute_analysis()</code>
+route documentation</a>. Its eligibility rules differ from those for
+posterior draws.</li>
+<li><strong>You want to explore spread around point
+predictions.</strong> Conformal or MC-dropout draws are for prediction
+diagnostics, not downstream inference; <code>with_imputations()</code>
+refuses them for that purpose.</li>
+</ul>
+<p>The registered validation did not establish reliable downstream
+inference for either route in the tested settings. These are different
+workflows with different requirements.</p>
 <p><code>multi_impute()</code> offers three ways to draw the missing
-cells. Only one of them is a proper multiple imputation for downstream
-inference. The default, <code>draws_method = &quot;auto&quot;</code>, uses
-<code>&quot;posterior&quot;</code> whenever the data meet its requirements (below)
-and otherwise falls back to <code>&quot;conformal&quot;</code> with a message
-saying why.</p>
+cells. The default, <code>draws_method = &quot;auto&quot;</code>, uses
+<code>&quot;posterior&quot;</code> when the trait types and supplied arguments fit
+that method (below). If they do not, it falls back to
+<code>&quot;conformal&quot;</code> with a message explaining why. Inputs that
+cannot be imputed, such as data with no missing cells or fewer than two
+observed values for a trait, produce an error instead of a fallback.</p>
 <table>
 <colgroup>
 <col width="33%" />
@@ -365,42 +425,52 @@ saying why.</p>
 <thead>
 <tr class="header">
 <th><code>draws_method</code></th>
-<th>Use it for</th>
-<th>Pass to <code>with_imputations()</code> and
-<code>pool_mi()</code>?</th>
+<th>What these draws provide</th>
+<th>Can the software fit and combine them?</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
 <td><code>&quot;posterior&quot;</code></td>
-<td>Linear analyses of imputed continuous traits on their imputation
-scale</td>
-<td>Yes, for those analyses</td>
+<td>Posterior draws for eligible continuous traits; inferential validity
+is not established</td>
+<td>Yes; software does not check whether your analysis formula meets the
+conditions below</td>
 </tr>
 <tr class="even">
 <td><code>&quot;conformal&quot;</code> (<code>&quot;auto&quot;</code> fallback)</td>
-<td>Looking at the spread of plausible values</td>
-<td>No, refused</td>
+<td>Show spread around point predictions for exploration; not for
+downstream inference</td>
+<td>No; <code>with_imputations()</code> rejects these draws</td>
 </tr>
 <tr class="odd">
 <td><code>&quot;mc_dropout&quot;</code></td>
-<td>Looking at the spread of plausible values</td>
-<td>No, refused</td>
+<td>Show spread around point predictions for exploration; not for
+downstream inference</td>
+<td>No; <code>with_imputations()</code> rejects these draws</td>
 </tr>
 </tbody>
 </table>
 <p>The conformal and MC-dropout draws perturb each missing cell around a
 point prediction. They do not draw the cells jointly from their
-distribution given the observed data. In a simulation of a phylogenetic
-regression slope (16 regimes: two traits, n = 300 or 1000, Pagel’s
-lambda 1 or 0.5, random or clade-structured missingness, 120 replicates
-each), conformal draws biased the pooled slope towards zero by 0.20 to
-0.46 and the pooled 95% intervals covered the true slope in 0 to 17% of
-replicates. Other estimands were not measured.
-<code>with_imputations()</code> therefore refuses these draws. A list of
-fits built by hand is still pooled by <code>pool_mi()</code>, with a
-warning that its provenance cannot be checked; do not do this with
-conformal or MC-dropout draws.</p>
+distribution given the observed data. In the conformal route,
+continuous, count, ordinal, and proportion traits use the reported
+<code>pred$se</code> as a scale input for fallback draws when no finite
+conformal score is available. For log-transformed continuous traits,
+log1p-transformed counts, and logit-transformed proportions,
+<code>pred$se</code> is reported on the original scale, but the draw is
+made on the transformed scale. Pigauto does not fully convert
+<code>pred$se</code> between these scales, so diagnostic draw spread may
+be too wide or too narrow. Fitted point predictions are unchanged. In a
+simulation of a phylogenetic regression slope (16 regimes: two traits, n
+= 300 or 1000, Pagel’s lambda 1 or 0.5, random or clade-structured
+missingness, 120 replicates each), conformal draws biased the pooled
+slope towards zero by 0.20 to 0.46 and the pooled 95% intervals covered
+the true slope in 0 to 17% of replicates. Other estimands were not
+measured. <code>with_imputations()</code> therefore refuses these draws.
+A list of fits built by hand is still pooled by <code>pool_mi()</code>,
+with a warning that its provenance cannot be checked; do not do this
+with conformal or MC-dropout draws.</p>
 <p>This applies to the draws, not to the per-cell conformal intervals
 that <code>impute()</code> reports. Those intervals summarise
 uncertainty about a single imputed value and were close to 95% coverage
@@ -414,28 +484,84 @@ requires:</p>
 <ul>
 <li>continuous traits only,</li>
 <li>one row per species (no <code>species_col</code>),</li>
-<li>no <code>covariates</code>.</li>
+<li>no <code>covariates</code>,</li>
+<li>at least one missing cell and at least two observed values for each
+trait.</li>
 </ul>
-<p>In simulation (continuous traits, 30% missing completely at random,
-200 datasets per cell, n = 100 to 1000, Pagel’s lambda 0.3 to 1, trait
-correlation 0 or 0.5), a Rubin-pooled downstream PGLS slope and
-phylogenetic correlation had 95% interval coverage of 0.925 to 0.975 in
-every cell, including correlated traits at lambda = 1 (slope coverage
-0.955, 0.940 and 0.965 at n = 100, 300 and 1000). At n = 100 with
-correlated traits the pooled slope was biased by about -0.02 towards
-zero, with coverage still 0.96. The current residual prior separates
-standard deviations, with half-Cauchy priors scaled to the observed
-latent traits, from a residual correlation with an LKJ(1) prior. Before
+<p>For the documented downstream route, the model must be linear in the
+imputed traits on the scale used for imputation, and it must use only
+those traits. For example, do not add an external covariate, a squared
+trait, or an interaction. <code>with_imputations()</code> runs your
+fitting function on each completed dataset and returns the fits.
+<code>pool_mi()</code> combines fixed-effect estimates and their
+uncertainty across successful fits. Neither function checks whether the
+model formula meets these conditions. Passing the software checks does
+not establish that the analysis meets them or that its inference is
+validated.</p>
+</div>
+<div id="evidence-and-limits" class="section level3">
+<h3>Evidence and limits</h3>
+<p>These results come from separate simulation campaigns and answer
+related, distinct questions. The earlier campaign estimates coverage
+under its listed conditions. The later registered campaign applies
+prespecified support criteria across a broader, frozen set of scenarios.
+Read each result within its own scope; for the current inferential
+evidence, see the <a href="validation-results.html#inferential-results">registered
+results</a>.</p>
+<p><strong>Later rerun of the earlier simulation campaign.</strong> With
+pigauto’s separation prior, continuous traits, 30% missing completely at
+random, 200 datasets per condition, n = 100 to 1000, Pagel’s lambda 0.3
+to 1, and trait correlation 0 or 0.5, Rubin-pooled downstream PGLS
+slopes and phylogenetic correlations had 95% interval coverage from
+0.925 to 0.975 across the tested conditions. At lambda = 1 and trait
+correlation = 0.5, pigauto slope coverage was 0.955, 0.940, and 0.965 at
+n = 100, 300, and 1000. At n = 100, pigauto’s slope bias relative to the
+complete-data estimate was about -0.037; the matched frequentist
+multiple-imputation comparator had bias about -0.021. These results
+describe this simulation, not general calibration.</p>
+<p><strong>Later registered validation.</strong> Across 44 tested
+inferential rows, none was supported: 12 failed and 32 were
+indeterminate. This includes complete-data controls and is limited to
+the frozen simulation settings. Within those results, five of eight
+posterior slope regimes failed and three were indeterminate, with
+empirical 95% coverage from 86.2% to 95.2%. See the <a href="validation-results.html#inferential-results">registered
+inferential results</a> for scope and criteria.</p>
+<p><strong>Sampler details.</strong> The current separation prior uses
+half-Cauchy priors for residual standard deviations, scaled to the
+observed latent traits, and an LKJ(1) prior for the full
+residual-correlation matrix. Before applying the numerical cutoff, the
+LKJ(1) prior does not give each pairwise correlation a uniform
+distribution when there are more than two traits. For numerical
+stability, the sampler gives zero prior density if the smallest
+eigenvalue of the residual covariance matrix, standardized by observed
+latent-trait standard deviations, is below 0.000001. In plain language,
+on this standardized scale, variance along every unit-length direction
+must be at least 0.000001. This cutoff narrows the prior support. Before
 pigauto 0.11.0.9002, the sampler used an inverse-Wishart residual prior.
-In the simulation above, that legacy prior attenuated the relationship
+In the earlier campaign, that legacy prior attenuated the relationship
 between correlated traits at lambda near 1 (coverage 0.75 at n = 1000).
-It remains selectable only when reproducing that earlier analysis: set
+It remains selectable only when reproducing that analysis: set
 <code>posterior_control = list(residual_prior = &quot;iw&quot;)</code>. New
 posterior fits use the separation prior described above by default.</p>
-<p>For one incomplete covariate in a Gaussian <code>lm</code>, a
-binomial <code>glm</code> or an <code>lmer</code> with one random
-intercept, <code>multi_impute_analysis()</code> provides a narrower
-analysis-aware route; see <code>?multi_impute_analysis</code>.</p>
+<p>As a separate, experimental option,
+<code>multi_impute_analysis()</code> declares the substantive analysis
+model and supports one incomplete double-precision continuous covariate
+under missing at random (MAR); the outcome and all other analysis
+variables must be fully observed. Current supported models are a
+Gaussian <code>lm</code>, binomial-logit <code>glm</code>, or Gaussian
+<code>lmer</code> with one random intercept. Validity also depends on a
+correctly specified conditional imputation model. For the binomial-logit
+<code>glm</code> (SMCFCS) and Gaussian <code>lmer</code>
+(<code>jomo</code>) routes, inspect the engine’s convergence diagnostics
+yourself: pigauto captures engine warnings and stops if either route
+emits them, but it does not calculate or certify sampler convergence.
+The Gaussian <code>lm</code> route uses a separate Bayesian
+Normal-regression sampler. This route does not use pigauto’s
+phylogenetic baseline or GNN and does not propagate posterior-tree
+uncertainty. See the <a href="../reference/multi_impute_analysis.html">documented conditions for
+<code>multi_impute_analysis()</code></a>. This experimental route does
+not validate the posterior-draw route described above.</p>
+</div>
 </div>
 <div id="impute" class="section level2">
 <h2>Impute</h2>
@@ -455,14 +581,20 @@ traits, so we delete some values to have something to impute.</p>
 <span id="cb1-12"><a href="#cb1-12" tabindex="-1"></a>mi <span class="ot">&lt;-</span> <span class="fu">multi_impute</span>(traits, tree300, <span class="at">m =</span> <span class="dv">20</span><span class="dt">L</span>,</span>
 <span id="cb1-13"><a href="#cb1-13" tabindex="-1"></a>                   <span class="at">draws_method =</span> <span class="st">&quot;posterior&quot;</span>, <span class="at">seed =</span> <span class="dv">1</span><span class="dt">L</span>)</span>
 <span id="cb1-14"><a href="#cb1-14" tabindex="-1"></a>mi</span></code></pre></div>
-<p>With the default sampler settings, a simulated four-trait dataset of
-300 species took about ten minutes per fit on one core (median 616 s,
-Totoro server); fits that need automatic chain extensions take longer.
-Check convergence before using the draws:
-<code>mi$posterior$diagnostics</code> holds split R-hat and bulk
-effective sample size for each parameter, and
-<code>multi_impute()</code> warns if the chains have not converged after
-its automatic extensions.</p>
+<p>With the default sampler settings, one sampler run for a simulated
+four-trait dataset of 300 species took about ten minutes on one core
+(median 616 s, Totoro server). That run produces all <code>m</code>
+completed datasets; the time is not ten minutes for each dataset. Fits
+that need automatic chain extensions take longer. Check convergence
+before using the draws: <code>mi$posterior$diagnostics</code> holds
+split R-hat and bulk effective sample size for the monitored covariance
+and lambda parameters. <code>multi_impute()</code> warns if the chains
+have not converged after its automatic extensions. If the convergence
+flag is <code>FALSE</code> or unavailable, stop before interpreting or
+pooling these draws. Inspect the reported diagnostics and the sampler
+controls in the <a href="../reference/multi_impute.html"><code>multi_impute()</code>
+reference</a>, then refit and check again. Passing the sampler’s
+convergence rule does not establish calibrated downstream inference.</p>
 <div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>mi<span class="sc">$</span>posterior<span class="sc">$</span>diagnostics</span>
 <span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="fu">attr</span>(mi<span class="sc">$</span>posterior<span class="sc">$</span>diagnostics, <span class="st">&quot;converged&quot;</span>)</span></code></pre></div>
 <p><code>mi$datasets</code> is a list of <code>m</code> completed data
@@ -472,12 +604,17 @@ dataset; only the missing cells differ.</p>
 <div id="fit-and-pool" class="section level2">
 <h2>Fit and pool</h2>
 <p><code>with_imputations()</code> applies a model-fitting function to
-every completed dataset and records where the datasets came from.
-<code>pool_mi()</code> then combines the fixed-effect estimates with
-Rubin’s rules (Rubin 1987; Barnard and Rubin 1999) and returns one row
-per coefficient with the pooled estimate, standard error, degrees of
-freedom, confidence interval and the fraction of missing information
-(<code>fmi</code>).</p>
+every completed dataset and attaches a workflow tag so pigauto can
+distinguish known imputation routes. The tag does not check your model
+formula or independently verify where the data came from. By default, a
+failed model fit is recorded and reported while fitting continues;
+<code>pool_mi()</code> drops failed fits. Check the failed dataset
+indices and the number of fits left before interpreting pooled results.
+At least two successful fits are required. <code>pool_mi()</code>
+combines the fixed-effect estimates with Rubin’s rules (Rubin 1987;
+Barnard and Rubin 1999) and returns one row per coefficient with the
+pooled estimate, standard error, degrees of freedom, confidence interval
+and the fraction of missing information (<code>fmi</code>).</p>
 <p><code>drmTMB</code> and <code>gllvmTMB</code> are optional model
 packages, not pigauto dependencies. Install either separately before
 running its example: use <code>install.packages(&quot;drmTMB&quot;)</code> for the
@@ -486,19 +623,30 @@ location-scale model, or
 latent-variable model. Other external model packages used below also
 need to be installed separately.</p>
 <p>The examples below show how each model class is fitted and how its
-fixed effects are extracted. Inferential validation of these posterior
-imputations is narrower: the analysis must be linear in the imputed
-continuous traits, use them on their imputation scale, and include no
-variables outside those traits. Check which traits
+fixed effects are extracted. The registered posterior tests did not
+establish calibrated inference: five of eight slope regimes failed and
+three were indeterminate. The documented software route is limited to
+analyses linear in the imputed continuous traits on the scale where they
+were imputed, using variables among those traits. Check which traits
 <code>log_transform</code> transformed before fitting
 <code>log(...)</code>. The joined diet variable, distributional model,
-and latent-model structure in later examples are outside that
-validation. Their pooled tables demonstrate software compatibility; they
-do not establish calibrated inference for those analyses.</p>
-<p>The question in every example is the same: how does wing length scale
-with body mass?</p>
+and latent-model structure in later examples are compatibility
+demonstrations only. They are outside the documented posterior inference
+eligibility conditions as well as the tested slope scenarios. Do not
+treat those examples as supported downstream inference workflows.</p>
+<p>The regression examples ask how wing length scales with body mass.
+The latent-variable example is separate: it demonstrates pooling trait
+means from a joint multivariate model.</p>
 <div id="phylogenetic-regression-nlme" class="section level3">
 <h3>Phylogenetic regression (nlme)</h3>
+<p>By default, <code>multi_impute()</code> logs each continuous trait
+whose observed values are all positive, then returns completed data on
+the original scale. In this example, the <code>log(...)</code> formula
+uses the scale on which those traits were imputed. If your input columns
+already contain logged values, set <code>log_transform = FALSE</code>
+and use those columns directly in the model, for example
+<code>Wing.Length ~ Mass</code>; wrapping them in <code>log()</code>
+would log them again.</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a>fits <span class="ot">&lt;-</span> <span class="fu">with_imputations</span>(mi, <span class="cf">function</span>(d) {</span>
 <span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a>  d<span class="sc">$</span>species <span class="ot">&lt;-</span> <span class="fu">rownames</span>(d)</span>
 <span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a>  nlme<span class="sc">::</span><span class="fu">gls</span>(<span class="fu">log</span>(Wing.Length) <span class="sc">~</span> <span class="fu">log</span>(Mass), <span class="at">data =</span> d,</span>
@@ -507,8 +655,11 @@ with body mass?</p>
 <span id="cb3-6"><a href="#cb3-6" tabindex="-1"></a>})</span>
 <span id="cb3-7"><a href="#cb3-7" tabindex="-1"></a><span class="fu">pool_mi</span>(fits)</span></code></pre></div>
 </div>
-<div id="mixed-models-lme4-and-glmmtmb" class="section level3">
-<h3>Mixed models (lme4 and glmmTMB)</h3>
+<div id="compatibility-example-mixed-models-lme4-and-glmmtmb" class="section level3">
+<h3>Compatibility example: mixed models (lme4 and glmmTMB)</h3>
+<p>These examples add a diet effect after imputation. Diet is not part
+of the posterior imputation model, so these fits are outside its
+documented downstream-inference conditions.</p>
 <p>Variables that were not imputed can be joined to each completed
 dataset inside the fitting function. Here diet category
 (<code>Trophic.Level</code>) becomes a random intercept.</p>
@@ -543,8 +694,12 @@ estimated effects with this in mind. (Diet is also a small grouping
 factor here, four levels, one of them with a single species, so the
 random-intercept variance is poorly estimated.)</p>
 </div>
-<div id="location-scale-models-drmtmb" class="section level3">
-<h3>Location-scale models (drmTMB)</h3>
+<div id="compatibility-example-location-scale-model-drmtmb" class="section level3">
+<h3>Compatibility example: location-scale model (drmTMB)</h3>
+<p>This model estimates how residual spread changes with body mass,
+while the imputation model assumes constant residual variance. This
+example demonstrates software compatibility and falls outside the
+documented posterior-inference conditions.</p>
 <p><code>drmTMB</code> models the mean and the residual standard
 deviation together. <code>pool_mi()</code> pools both sets of fixed
 effects, labelled <code>mu:</code> and <code>sigma:</code>. The
@@ -559,8 +714,12 @@ many cells are imputed; this has not been measured.</p>
 <span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a>})</span>
 <span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a><span class="fu">pool_mi</span>(fits_drm)</span></code></pre></div>
 </div>
-<div id="multivariate-latent-variable-models-gllvmtmb" class="section level3">
-<h3>Multivariate latent-variable models (gllvmTMB)</h3>
+<div id="compatibility-example-latent-variable-model-gllvmtmb" class="section level3">
+<h3>Compatibility example: latent-variable model (gllvmTMB)</h3>
+<p>This joint latent-variable model demonstrates software compatibility
+and falls outside the documented posterior-inference conditions.
+<code>pool_mi()</code> below combines its fixed trait means; it does not
+pool latent loadings or variance components.</p>
 <p><code>gllvmTMB</code> fits all traits jointly in long format.
 <code>pool_mi()</code> pools its fixed effects (here the trait means);
 latent loadings and variance components are not pooled.</p>
@@ -593,21 +752,31 @@ estimates.</p>
 </div>
 <div id="bayesian-models-concatenate-do-not-pool" class="section level2">
 <h2>Bayesian models: concatenate, do not pool</h2>
-<p>Rubin’s rules combine point estimates and standard errors. A Bayesian
-fit already has a posterior distribution, and the right way to combine
-imputations is to stack the posterior draws from all <code>m</code> fits
-into one sample. <code>pool_mi()</code> refuses <code>brmsfit</code> and
-<code>MCMCglmm</code> objects for this reason.</p>
+<p>For eligible posterior imputations and a compatible Bayesian
+analysis, combine the fits by giving posterior draws from each imputed
+dataset equal representation in the combined sample. Check convergence
+for every fit before combining. Concatenating draws describes the
+combining procedure; it does not establish calibrated inference beyond
+the regimes reported above. The eligibility limits for the imputation
+method still apply. <code>pool_mi()</code> refuses <code>brmsfit</code>
+and <code>MCMCglmm</code> objects because they have posterior draws
+rather than Rubin-pooled coefficient estimates.</p>
 <p>With brms, <code>brm_multiple()</code> fits every completed dataset
 and combines the draws for you:</p>
 <div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>fit_b <span class="ot">&lt;-</span> brms<span class="sc">::</span><span class="fu">brm_multiple</span>(<span class="fu">log</span>(Wing.Length) <span class="sc">~</span> <span class="fu">log</span>(Mass),</span>
 <span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a>                            <span class="at">data =</span> mi<span class="sc">$</span>datasets, <span class="at">chains =</span> <span class="dv">2</span>, <span class="at">refresh =</span> <span class="dv">0</span>)</span>
 <span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a><span class="fu">summary</span>(fit_b)</span></code></pre></div>
-<p>Check the per-dataset convergence diagnostics in
-<code>fit_b$rhats</code>; the combined R-hat can look poor simply
-because the imputed datasets differ. Stacking draws needs more
-imputations than Rubin’s rules for stable results (Zhou and Reiter
-2010), so prefer a larger <code>m</code> than the 20 used here.</p>
+<p>Check convergence separately for each imputed dataset, following the
+current <a href="https://paulbuerkner.com/brms/reference/brm_multiple.html"><code>brm_multiple()</code>
+diagnostics guidance</a>. The combined diagnostics can look poor because
+the imputed datasets have different posterior distributions. Zhou and
+Reiter (2010) found that posterior interval estimates from stacked draws
+could be too narrow with <code>m = 5</code> and, in some settings,
+<code>m = 20</code> compared with <code>m = 100</code>. Their results
+motivate checking posterior-draw pooling as <code>m</code> increases,
+while recognizing that the suitable number of imputations may differ by
+setting and pooling method. Check whether the posterior summaries of
+interest change as <code>m</code> increases.</p>
 <p>With MCMCglmm, fit each dataset and bind the fixed-effect
 samples:</p>
 <div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a>fits_mc <span class="ot">&lt;-</span> <span class="fu">lapply</span>(mi<span class="sc">$</span>datasets, <span class="cf">function</span>(d) {</span>

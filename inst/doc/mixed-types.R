@@ -45,6 +45,9 @@ dim(bl$mu)
 fit <- fit_pigauto(
   pd, tree,
   splits = spl,
+  gnn = FALSE,
+  lambda_mode = "fixed_1",
+  discrete_lambda = "fixed_1",
   verbose = FALSE,
   seed = 1
 )
@@ -65,7 +68,8 @@ head(pred$probabilities$diet)
 head(pred$se)
 
 ## ----evaluate-----------------------------------------------------------------
-ev <- evaluate_imputation(pred, pd$X_scaled, spl)
+pred_eval <- predict(fit, evaluation = TRUE)
+ev <- evaluate_imputation(pred_eval, pd$X_scaled, spl)
 print(ev)
 
 ## ----mi_workflow, eval=FALSE--------------------------------------------------

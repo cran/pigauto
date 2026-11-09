@@ -15,16 +15,31 @@ knitr::opts_chunk$set(
 # sum(is.na(df))                  # if 0, there's nothing for impute() to do
 
 ## ----section1-fix, eval = FALSE-----------------------------------------------
+# library(pigauto)
+# data(avonet300, tree300)
+# df <- avonet300
+# rownames(df) <- df$Species_Key
+# df$Species_Key <- NULL
+# 
 # set.seed(1L)
-# hide   <- sample(which(!is.na(df$Mass)), 30L)
+# n_hide <- min(30L, sum(!is.na(df$Mass)))
+# if (n_hide == 0L) stop("No observed Mass values are available to hide.")
+# hide   <- sample(which(!is.na(df$Mass)), n_hide)
 # df_obs <- df
-# df_obs$Mass[hide] <- NA          # hide 30 mass values
+# df_obs$Mass[hide] <- NA          # hide up to 30 mass values
 # 
 # result <- impute(df_obs, tree300)
 # 
 # result$completed$Mass[hide]      # pigauto's imputations
 # df$Mass[hide]                    # held-out truth, for comparison
-# sum(result$imputed_mask[, "Mass"])  # 30
+# sum(result$imputed_mask[, "Mass"])  # number of values hidden above
+
+## ----eval=FALSE---------------------------------------------------------------
+# mask <- result$imputed_mask
+# imputed_values <- lapply(colnames(mask), function(nm) {
+#   result$completed[[nm]][mask[, nm]]
+# })
+# names(imputed_values) <- colnames(mask)
 
 ## ----section2-diag, eval = FALSE----------------------------------------------
 # library(pigauto)
@@ -38,8 +53,14 @@ knitr::opts_chunk$set(
 # table(result$completed$Migration[hide])
 
 ## ----section2-fix, eval = FALSE-----------------------------------------------
+# library(pigauto)
+# data(avonet300, tree300)
+# df <- avonet300; rownames(df) <- df$Species_Key; df$Species_Key <- NULL
+# 
 # set.seed(1L)
-# hide   <- sample(which(!is.na(df$Migration)), 30L)
+# n_hide <- min(30L, sum(!is.na(df$Migration)))
+# if (n_hide == 0L) stop("No observed Migration values are available to hide.")
+# hide   <- sample(which(!is.na(df$Migration)), n_hide)
 # df_obs <- df
 # df_obs$Migration[hide] <- NA
 # 
@@ -47,7 +68,7 @@ knitr::opts_chunk$set(
 # result <- impute(df_obs, tree300, verbose = FALSE)
 # table(result$completed$Migration[hide], df$Migration[hide])
 # 
-# # Recommended for K = 3 ordinal: more draws + mode pooling
+# # Candidate for K = 3 ordinal: more draws + mode pooling
 # result_mode <- impute(df_obs, tree300, n_imputations = 20L,
 #                       pool_method = "mode", verbose = FALSE)
 # table(result_mode$completed$Migration[hide], df$Migration[hide])
@@ -56,9 +77,13 @@ knitr::opts_chunk$set(
 # library(pigauto)
 # data(avonet300, tree300)
 # df <- avonet300; rownames(df) <- df$Species_Key; df$Species_Key <- NULL
-# fit <- impute(df, tree300, verbose = FALSE)$fit
+# set.seed(1L)
+# hide <- sample(which(!is.na(df$Migration)), 30L)
+# df_obs <- df
+# df_obs$Migration[hide] <- NA
+# fit <- impute(df_obs, tree300, gnn = TRUE, verbose = FALSE)$fit
 # 
-# # Per-latent-column calibrated gates (since v0.9.1.9002):
+# # Per-latent-column calibrated gates:
 # fit$r_cal_bm        # r assigned to the BM baseline
 # fit$r_cal_gnn       # r assigned to the GNN delta
 # fit$r_cal_mean      # r assigned to the grand mean
@@ -68,7 +93,11 @@ knitr::opts_chunk$set(
 # data(avonet300, tree300)
 # df <- avonet300; rownames(df) <- df$Species_Key; df$Species_Key <- NULL
 # 
-# fit <- impute(df, tree300, phylo_signal_gate = TRUE)$fit
+# set.seed(1L)
+# hide <- sample(which(!is.na(df$Mass)), 30L)
+# df_obs <- df
+# df_obs$Mass[hide] <- NA
+# fit <- impute(df_obs, tree300, phylo_signal_gate = TRUE)$fit
 # fit$phylo_signal_per_trait
 
 ## ----section5-diag, eval = FALSE----------------------------------------------
@@ -79,8 +108,18 @@ knitr::opts_chunk$set(
 # sum(predicted_mass > 5 * obs_max)
 
 ## ----section5-fix, eval = FALSE-----------------------------------------------
+# library(pigauto)
+# data(avonet300, tree300)
+# df <- avonet300; rownames(df) <- df$Species_Key; df$Species_Key <- NULL
+# set.seed(1L)
+# n_hide <- min(30L, sum(!is.na(df$Mass)))
+# if (n_hide == 0L) stop("No observed Mass values are available to hide.")
+# hide <- sample(which(!is.na(df$Mass)), n_hide)
+# df_obs <- df
+# df_obs$Mass[hide] <- NA
+# 
 # result <- impute(df_obs, tree300,
 #                  clamp_outliers = TRUE,
-#                  clamp_factor   = 5,    # Tukey-style outlier cap
+#                  clamp_factor   = 5,
 #                  verbose = FALSE)
 

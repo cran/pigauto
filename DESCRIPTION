@@ -1,8 +1,9 @@
 Package: pigauto
 Title: Fill in Missing Species Traits Using a Phylogenetic Tree
-Version: 0.11.0
+Version: 0.11.1
 Authors@R: 
-    person("Shinichi", "Nakagawa", role = c("aut", "cre", "cph"), email = "itchyshin@gmail.com")
+    c(person("Shinichi", "Nakagawa", role = c("aut", "cre", "cph"), email = "itchyshin@gmail.com"),
+      person("Daniel", "Noble", role = "ctb"))
 Description: Imputes missing species trait data for comparative analyses
     by combining three sources of information: phylogenetic similarity
     (closely related species share similar traits), cross-trait
@@ -12,9 +13,9 @@ Description: Imputes missing species trait data for comparative analyses
     unordered categories, bounded proportions, zero-inflated counts, and
     compositional multi-proportion data in a single call. The default
     method is a phylogenetic baseline calibrated on held-out data; an
-    optional graph neural network correction, which is needed to use
-    covariates, is blended in through a per-trait gate that retains a
-    baseline fallback. Provides conformal
+    optional graph neural network prediction is blended in through a
+    per-trait gate that retains a baseline fallback. Covariates can inform
+    the network and selected baseline paths. Provides conformal
     prediction intervals for continuous, count, ordinal, and proportion
     traits and an experimental analysis-aware multiple-imputation workflow
     for one missing continuous covariate in Gaussian linear, binomial-logit,
@@ -37,15 +38,17 @@ LazyDataCompression: xz
 Depends: R (>= 4.1)
 Imports: torch, ape, ggplot2, Matrix, rlang, stats, utils, graphics,
         grDevices, withr,
-Suggests: testthat, jsonlite, knitr, rmarkdown, pkgdown, RSpectra,
-        Rphylopars, jomo, MCMCglmm, brms, glmmTMB, lme4, nlme,
-        phangorn, phylolm, rgbif, smcfcs, terra, phytools
+Suggests: testthat, covr, yaml, jsonlite, knitr, rmarkdown, pkgdown,
+        RSpectra, Rphylopars, jomo, MCMCglmm, brms, glmmTMB, lme4,
+        nlme, phangorn, phylolm, rgbif, smcfcs, terra, phytools
 VignetteBuilder: knitr
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0
+RoxygenNote: 7.3.3
 NeedsCompilation: no
-Packaged: 2026-10-18 02:40:59 UTC; z3437171
-Author: Shinichi Nakagawa [aut, cre, cph]
+Packaged: 2026-11-08 17:39:25 UTC; z3437171
+Author: Shinichi Nakagawa [aut, cre, cph],
+  Daniel Noble [ctb]
 Maintainer: Shinichi Nakagawa <itchyshin@gmail.com>
 Repository: CRAN
-Date/Publication: 2026-10-18 08:20:02 UTC
+Date/Publication: 2026-11-09 13:20:02 UTC

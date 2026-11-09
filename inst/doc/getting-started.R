@@ -6,41 +6,97 @@ knitr::opts_chunk$set(
   fig.height = 4
 )
 
-## ----canonical-journey, eval=FALSE--------------------------------------------
+## ----install, eval=FALSE------------------------------------------------------
+# install.packages("pigauto")
+# packageVersion("pigauto")
+
+## ----install-github, eval=FALSE-----------------------------------------------
+# install.packages("pak") # only needed once
+# pak::pak("itchyshin/pigauto")
+
+## ----install-torch, eval=FALSE------------------------------------------------
+# torch::install_torch()
+
+## ----first-run, eval=FALSE----------------------------------------------------
 # library(pigauto)
+# data(avonet300, tree300)
 # 
-# traits <- read_traits("traits.csv")
+# traits <- avonet300
+# rownames(traits) <- traits$Species_Key
+# traits$Species_Key <- NULL
+# target <- which(!is.na(traits$Mass))[1L]
+# truth <- traits$Mass[target]
+# traits$Mass[target] <- NA_real_
+# 
+# check <- check_pigauto(traits, tree300)
+# print(check)
+# if (!check$ready) stop("Fix the input problems reported by check_pigauto().")
+# result <- impute(traits, tree300, gnn = FALSE)
+# completed <- completed_data(result)
+# data.frame(
+#   species = rownames(traits)[target],
+#   measured_mass = truth,
+#   imputed_mass = completed$Mass[target]
+# )
+
+## ----file-input-route, eval=FALSE---------------------------------------------
+# traits <- read_traits("traits.csv", species_col = "species")
 # tree <- read_tree("tree.nwk")
-# check_pigauto(traits, tree)
-# result <- impute(traits, tree)
+# check <- check_pigauto(traits, tree)
+# print(check)
+# if (identical(check$status, "not_needed")) {
+#   message("All matched target cells are observed; no imputation is needed.")
+# } else if (identical(check$status, "error")) {
+#   stop("Fix the input problems reported by check_pigauto().")
+# }
+
+## ----file-input-fit, eval=FALSE-----------------------------------------------
+# result <- impute(traits, tree, gnn = FALSE)
 # completed <- completed_data(result)
 # pigauto_report(result)
 
-## ----declarations, eval=FALSE-------------------------------------------------
-# # Ordered ecological states
-# traits$threat <- ordered(traits$threat, levels = c("LC", "NT", "VU", "EN", "CR"))
+## ----declaration-ordinal, eval=FALSE------------------------------------------
+# result <- impute(traits, tree, ordinal_levels = list(
+#   threat = c("LC", "NT", "VU", "EN", "CR")
+# ))
 # 
-# # Integer-valued continuous measurement; integer otherwise means count
-# result <- impute(traits, tree, trait_types = c(length_mm = "continuous"))
-# 
-# # Numeric 0-1 proportion and zero-inflated count require explicit declarations
-# result <- impute(traits, tree, trait_types = c(cover = "proportion", parasites = "zi_count"))
-# 
-# # A composition is complete by row and its observed components sum to one
-# result <- impute(traits, tree,
-#   multi_proportion_groups = list(diet = c("diet_insect", "diet_fruit", "diet_seed")))
+# # Equivalent: construct the ordered factor yourself.
+# traits$threat <- ordered(
+#   traits$threat,
+#   levels = c(
+#     "LC", "NT", "VU", "EN", "CR"
+#   )
+# )
+# result <- impute(traits, tree)
 
-## ----install, eval=FALSE------------------------------------------------------
-# # CRAN release
-# install.packages("pigauto")
-# packageVersion("pigauto")
-# 
-# # GitHub version, if CRAN has an earlier version
-# # install.packages("pak") # once, if needed
-# pak::pak("itchyshin/pigauto")
-# 
-# # Install the torch runtime only if you plan to use gnn = TRUE
-# torch::install_torch()
+## ----declaration-integer-continuous, eval=FALSE-------------------------------
+# result <- impute(
+#   traits, tree,
+#   trait_types = c(
+#     length_mm = "continuous"
+#   )
+# )
+
+## ----declaration-proportion-zi-count, eval=FALSE------------------------------
+# result <- impute(
+#   traits, tree,
+#   trait_types = c(
+#     cover = "proportion",
+#     parasites = "zi_count"
+#   )
+# )
+
+## ----declaration-composition, eval=FALSE--------------------------------------
+# result <- impute(
+#   traits, tree,
+#   multi_proportion_groups = list(
+#     diet = c(
+#       "diet_insect",
+#       "diet_fruit",
+#       "diet_seed"
+#     )
+#   )
+# )
 
 ## ----load---------------------------------------------------------------------
 library(pigauto)
@@ -49,9 +105,9 @@ library(ape)
 ## ----quickstart, eval=FALSE---------------------------------------------------
 # result <- impute(traits, tree)
 # 
-# result$completed    # data.frame: observed values preserved, NAs filled
-# result$imputed_mask # logical matrix: TRUE where a cell was imputed
-# result$prediction$se # per-cell uncertainty (original units)
+# result$completed    # observed values preserved; some missing values may remain NA
+# result$imputed_mask # TRUE marks missing targets in fitted rows, not successful fills
+# result$prediction$se # per-cell, type-dependent uncertainty summaries
 
 ## ----data---------------------------------------------------------------------
 data(avonet300, tree300, package = "pigauto")
@@ -67,9 +123,10 @@ pd <- preprocess_traits(traits, tree300, log_transform = TRUE)
 print(pd)
 
 ## ----splits-------------------------------------------------------------------
-splits <- make_missing_splits(pd$X_scaled, missing_frac = 0.25, seed = 42)
+splits <- make_missing_splits(pd$X_scaled, missing_frac = 0.25, seed = 42,
+                              trait_map = pd$trait_map)
 
-cat("Total held-out cells:", length(splits$val_idx) + length(splits$test_idx), "\n")
+cat("Held-out latent cells:", length(splits$val_idx) + length(splits$test_idx), "\n")
 cat("  Validation:", length(splits$val_idx), "\n")
 cat("  Test:      ", length(splits$test_idx), "\n")
 
@@ -132,7 +189,9 @@ cat("Kernel bandwidth sigma:", round(graph$sigma, 3), "\n")
 
 ## ----evaluate, eval=FALSE-----------------------------------------------------
 # # Held-out scores (z-score RMSE for continuous traits)
-# evaluate_imputation(pred$imputed_latent, pd$X_scaled, splits)
+# # Mask validation/test cells before scoring; plain predict() is for imputation.
+# pred_eval <- predict(fit, evaluation = TRUE)
+# evaluate_imputation(pred_eval, pd$X_scaled, splits)
 # 
 # # Per-trait calibrated gate. 0 means baseline-only.
 # fit$r_cal
@@ -160,7 +219,7 @@ cat("Kernel bandwidth sigma:", round(graph$sigma, 3), "\n")
 # pool_mi(fits)
 
 ## ----active-impute, eval=FALSE------------------------------------------------
-# res <- impute(traits, tree)
+# res <- impute(traits, tree300)
 # 
 # # Top-10 individual (species, trait) cells, ordered by expected
 # # total variance reduction:
@@ -185,6 +244,7 @@ cat("Kernel bandwidth sigma:", round(graph$sigma, 3), "\n")
 ## ----phylo-signal-gate, eval=FALSE--------------------------------------------
 # result <- impute(traits, tree,
 #                  phylo_signal_gate     = TRUE,   # opt-in (default FALSE)
+#                  safety_floor          = TRUE,   # enables the grand-mean fallback
 #                  phylo_signal_threshold = 0.2,   # default; min lambda to keep BM/GNN
 #                  phylo_signal_method   = "lambda")
 
@@ -195,7 +255,9 @@ cat("Kernel bandwidth sigma:", round(graph$sigma, 3), "\n")
 # # Step 1: GBIF occurrence centroids (median lat/lon across cleaned points)
 # gbif <- pull_gbif_centroids(species          = rownames(my_traits),
 #                             cache_dir        = "cache/gbif",
-#                             occurrence_limit = 500L)
+#                             occurrence_limit = 500L,
+#                             store_points     = TRUE,
+#                             refresh_cache    = TRUE)
 # #> data.frame with columns species, centroid_lat, centroid_lon, n_occurrences
 # 
 # # Step 2: WorldClim bioclim summaries (median + IQR of all 19 bio variables
@@ -203,11 +265,18 @@ cat("Kernel bandwidth sigma:", round(graph$sigma, 3), "\n")
 # clim <- pull_worldclim_per_species(species             = rownames(my_traits),
 #                                     gbif_cache_dir      = "cache/gbif",
 #                                     worldclim_cache_dir = "cache/worldclim",
-#                                     resolution          = "10m")
+#                                     resolution          = "10m",
+#                                     refresh_cache       = TRUE)
 # #> data.frame with bio1..bio19 medians + IQRs + n_extracted per species
 # 
-# # Step 3: hand the whole climate frame to impute() as covariates
-# result <- impute(my_traits, my_tree, covariates = clim, gnn = TRUE)
+# # Check the species order before fitting: covariate rows must match trait rows.
+# stopifnot(identical(clim$species, rownames(my_traits)))
+# 
+# # Step 3: keep the intended numeric climate summaries, not species or count
+# climate_cols <- grep("^bio[0-9]+_(median|iqr)$", names(clim), value = TRUE)
+# clim_cov <- clim[, climate_cols, drop = FALSE]
+# if (anyNA(clim_cov)) stop("Resolve missing climate values before fitting")
+# result <- impute(my_traits, my_tree, covariates = clim_cov, gnn = TRUE)
 
 ## ----gpu, eval=FALSE----------------------------------------------------------
 # torch::cuda_is_available()       # NVIDIA GPU

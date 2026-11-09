@@ -346,8 +346,32 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 <p>Real comparative datasets contain many kinds of traits: body mass
 (continuous), clutch size (count), migratory status (yes/no), diet type
 (carnivore/herbivore/omnivore), threat status (LC &lt; VU &lt; EN).
-pigauto handles all of them in a single model — you do not need separate
+pigauto handles all of them in a single model: you do not need separate
 imputation runs for different column types.</p>
+<div id="choose-a-workflow" class="section level3">
+<h3>Choose a workflow</h3>
+<ul>
+<li><strong>Fill missing cells in one trait table:</strong> start with
+<code>impute()</code>. The GNN is off by default. Review the returned
+predictions and the limits for each trait type.</li>
+<li><strong>Inspect preprocessing, fit stages, or validation
+scores:</strong> follow this article’s lower-level workflow. Keep
+validation and test cells separate from predictions, and check each
+metric’s scale and sample size.</li>
+<li><strong>Carry missing-data uncertainty into a downstream
+model:</strong> start with the <a href="multiple-imputation.html">multiple imputation guide</a>. Choose a
+route that matches your data and analysis, then check its eligibility
+and validation limits. Random variation among completed tables alone
+does not establish valid inference.</li>
+<li><strong>Compare predictions across posterior trees:</strong> use the
+<a href="tree-uncertainty.html">tree sensitivity guide</a>. This is a
+prediction-sensitivity check; tree-aware downstream inference is not
+supported by this workflow.</li>
+</ul>
+<p>The mixed-type example below teaches the lower-level steps. For a
+first analysis with your own data, check the species names and trait
+declarations before fitting; the checklist below shows what to
+verify.</p>
 <table>
 <colgroup>
 <col width="19%" />
@@ -398,14 +422,16 @@ imputation runs for different column types.</p>
 <td>Proportion</td>
 <td><code>numeric</code> (0–1)</td>
 <td>Habitat cover, diet fraction</td>
-<td>Requires <code>trait_types = &quot;proportion&quot;</code> override</td>
+<td>Requires a named override,
+e.g. <code>trait_types = c(cover = &quot;proportion&quot;)</code></td>
 </tr>
 <tr class="odd">
 <td>ZI count</td>
 <td><code>integer</code> (zero-inflated)</td>
 <td>Parasite load, rare behaviour</td>
-<td>Requires <code>trait_types = &quot;zi_count&quot;</code> override;
-experimental — accuracy more variable than other types</td>
+<td>Requires a named override,
+e.g. <code>trait_types = c(parasite_load = &quot;zi_count&quot;)</code>;
+experimental</td>
 </tr>
 <tr class="even">
 <td>Multi-proportion</td>
@@ -418,21 +444,40 @@ encoded via centred log-ratio (CLR) + per-component z-score</td>
 </tr>
 </tbody>
 </table>
-<p>The first five rows in this table are auto-detected from R column
-class; <code>proportion</code>, <code>zi_count</code>, and
-<code>multi_proportion</code> must be declared explicitly
-(<code>trait_types</code> or <code>multi_proportion_groups</code>). All
-eight share the same latent space — the phylogenetic baseline and GNN
-correction both operate in this space, and type-specific logic appears
-only at encoding, loss computation, and decoding.</p>
+<p>The first five rows in this table are generally inferred from R
+column class, subject to the exceptions below. <code>proportion</code>,
+<code>zi_count</code>, and <code>multi_proportion</code> must be
+declared explicitly (<code>trait_types</code> or
+<code>multi_proportion_groups</code>). Two-level ordered factors are
+detected as binary; integer columns with negative observed values are
+treated as continuous, while other integer columns are treated as
+counts. Use a named <code>trait_types</code> override when that
+inference does not match the measurement. All eight types share a latent
+representation, but type also determines baseline eligibility and
+dispatch, masking rules, loss, calibration, uncertainty summaries, and
+back-transformation. For examples, see the <a href="#baseline-fitting">baseline section</a> and <a href="#prediction-and-decoding">prediction and decoding</a>. Names in
+<code>trait_types</code> must match the corresponding trait columns.</p>
 <p>Before fitting a mixed table, use
 <code>check_pigauto(traits, tree)</code>. Its trait table records the
 detected type, declaration source, usable matched rows, and copy-ready
 corrections; its species report distinguishes matched, data-only, and
 tree-only identities.</p>
+<p>For a real dataset, first confirm that row names (or the declared
+species column) match the tree tips. Set factor levels in the intended
+order, explicitly declare proportions and zero-inflated counts, and
+declare compositional groups with <code>multi_proportion_groups</code>.
+Then resolve any issues reported by <code>check_pigauto()</code> before
+fitting.</p>
+</div>
 </div>
 <div id="synthetic-example" class="section level2">
 <h2>Synthetic example</h2>
+<p>This teaching example uses 60 simulated species. Validation evidence
+is described separately. The validation and test splits can contain only
+a few cells for some traits, so their scores and calibration are
+imprecise. For a real analysis, use enough observed values to support
+the validation split and inspect the reported <code>n</code> before
+interpreting a score.</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(pigauto)</span>
 <span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a><span class="fu">library</span>(ape)</span>
 <span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a></span>
@@ -500,7 +545,12 @@ column indices, and normalisation parameters:</p>
 <h2>Creating splits</h2>
 <p>When <code>trait_map</code> is supplied,
 <code>make_missing_splits()</code> operates at the original-trait level.
-For categorical traits, all K one-hot columns are held out together:</p>
+For categorical traits, all K one-hot columns are held out together. A
+zero-inflated count uses two latent columns: a recorded zero has an
+observed zero/non-zero gate and no magnitude, while a genuinely missing
+count has no observed gate. The split uses the gate to identify observed
+cells; the missing magnitude for a recorded zero does not mean the raw
+count was missing.</p>
 <div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a>spl <span class="ot">&lt;-</span> <span class="fu">make_missing_splits</span>(pd<span class="sc">$</span>X_scaled, <span class="at">missing_frac =</span> <span class="fl">0.20</span>,</span>
 <span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a>                           <span class="at">seed =</span> <span class="dv">1</span>, <span class="at">trait_map =</span> pd<span class="sc">$</span>trait_map)</span>
 <span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Val cells (latent):&quot;</span>, <span class="fu">length</span>(spl<span class="sc">$</span>val_idx), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
@@ -510,9 +560,11 @@ For categorical traits, all K one-hot columns are held out together:</p>
 </div>
 <div id="baseline-fitting" class="section level2">
 <h2>Baseline fitting</h2>
-<p>The baseline uses phylogenetic conditional MVN for continuous-family
-latent columns, and label-propagation or threshold/liability candidates
-for discrete-family columns:</p>
+<p>The baseline depends on trait type. Continuous-family latent columns
+use phylogenetic conditional multivariate-normal imputation. Discrete
+traits use phylogenetic label propagation or, for eligible combinations
+of traits, a threshold model. The architecture article describes the
+dispatch and its fallbacks:</p>
 <div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a>bl <span class="ot">&lt;-</span> <span class="fu">fit_baseline</span>(pd, tree, <span class="at">splits =</span> spl)</span>
 <span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a><span class="fu">dim</span>(bl<span class="sc">$</span>mu)</span>
 <span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a><span class="co">#&gt; [1] 60  7</span></span></code></pre></div>
@@ -520,35 +572,46 @@ for discrete-family columns:</p>
 <div id="fitting" class="section level2">
 <h2>Fitting</h2>
 <p><code>fit_pigauto()</code> calibrates the phylogenetic baseline for
-every trait type on the validation cells and computes the conformal
-intervals. With the default <code>gnn = FALSE</code> no network is
-trained. With <code>gnn = TRUE</code> it also trains the GNN correction,
-using type-specific losses and trait-level corruption masking when a
-<code>trait_map</code> is present.</p>
+each trait type on validation cells. It computes conformal scores for
+continuous, count, ordinal, and proportion traits, and for the
+positive-count magnitude of a zero-inflated count. That last score
+describes magnitude conditional on a non-zero count; it does not
+describe uncertainty about whether the count is zero. Binary,
+categorical, and multi-proportion traits do not receive these conformal
+scores. The lower-level fitter defaults to <code>gnn = FALSE</code>, so
+this example fits the baseline without constructing a network. Set
+<code>gnn = TRUE</code> to train the GNN correction as well. The example
+fixes both continuous and discrete Pagel’s lambda at 1 to keep this
+small illustration quick; it does not compare lambda settings. The
+<code>impute()</code> convenience function also defaults to the
+baseline-only route.</p>
 <div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">fit_pigauto</span>(</span>
 <span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a>  pd, tree,</span>
 <span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a>  <span class="at">splits =</span> spl,</span>
-<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a>  <span class="at">verbose =</span> <span class="cn">FALSE</span>,</span>
-<span id="cb6-5"><a href="#cb6-5" tabindex="-1"></a>  <span class="at">seed =</span> <span class="dv">1</span></span>
-<span id="cb6-6"><a href="#cb6-6" tabindex="-1"></a>)</span>
-<span id="cb6-7"><a href="#cb6-7" tabindex="-1"></a><span class="co">#&gt; Warning: Small validation set for 5 trait(s): mass (n=2), clutch (n=4), migr</span></span>
-<span id="cb6-8"><a href="#cb6-8" tabindex="-1"></a><span class="co">#&gt; (n=3), diet (n=3), threat (n=3). Calibrated gate and conformal scores will be</span></span>
-<span id="cb6-9"><a href="#cb6-9" tabindex="-1"></a><span class="co">#&gt; noisy for these trait(s). 95% split-conformal coverage is NOT achievable for 3</span></span>
-<span id="cb6-10"><a href="#cb6-10" tabindex="-1"></a><span class="co">#&gt; trait(s) with fewer than 19 validation cells (mass (n=2), clutch (n=4), threat</span></span>
-<span id="cb6-11"><a href="#cb6-11" tabindex="-1"></a><span class="co">#&gt; (n=3)): the achievable ceiling is n_val / (n_val + 1), which only reaches 0.95</span></span>
-<span id="cb6-12"><a href="#cb6-12" tabindex="-1"></a><span class="co">#&gt; at n_val &gt;= 19. See `?fit_pigauto` under &#39;Calibration at small n&#39; for smoothing</span></span>
-<span id="cb6-13"><a href="#cb6-13" tabindex="-1"></a><span class="co">#&gt; options.</span></span>
-<span id="cb6-14"><a href="#cb6-14" tabindex="-1"></a><span class="fu">print</span>(fit)</span>
-<span id="cb6-15"><a href="#cb6-15" tabindex="-1"></a><span class="co">#&gt; pigauto_fit</span></span>
-<span id="cb6-16"><a href="#cb6-16" tabindex="-1"></a><span class="co">#&gt;   GNN     : off (baseline only)</span></span>
-<span id="cb6-17"><a href="#cb6-17" tabindex="-1"></a><span class="co">#&gt;   Species : 60 </span></span>
-<span id="cb6-18"><a href="#cb6-18" tabindex="-1"></a><span class="co">#&gt;   Traits  : 5 -- mass, clutch, migr, diet, threat </span></span>
-<span id="cb6-19"><a href="#cb6-19" tabindex="-1"></a><span class="co">#&gt;   Types   : binary=1, categorical=1, continuous=1, count=1, ordinal=1 </span></span>
-<span id="cb6-20"><a href="#cb6-20" tabindex="-1"></a><span class="co">#&gt;   Architecture: hidden_dim = 64 | k_eigen = 4 </span></span>
-<span id="cb6-21"><a href="#cb6-21" tabindex="-1"></a><span class="co">#&gt;   Best val loss : 1.169 </span></span>
-<span id="cb6-22"><a href="#cb6-22" tabindex="-1"></a><span class="co">#&gt;   Test loss     : 1.1277 </span></span>
-<span id="cb6-23"><a href="#cb6-23" tabindex="-1"></a><span class="co">#&gt;   Gate calibration: yes</span></span>
-<span id="cb6-24"><a href="#cb6-24" tabindex="-1"></a><span class="co">#&gt;   Conformal scores: 3 traits</span></span></code></pre></div>
+<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a>  <span class="at">gnn =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb6-5"><a href="#cb6-5" tabindex="-1"></a>  <span class="at">lambda_mode =</span> <span class="st">&quot;fixed_1&quot;</span>,</span>
+<span id="cb6-6"><a href="#cb6-6" tabindex="-1"></a>  <span class="at">discrete_lambda =</span> <span class="st">&quot;fixed_1&quot;</span>,</span>
+<span id="cb6-7"><a href="#cb6-7" tabindex="-1"></a>  <span class="at">verbose =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb6-8"><a href="#cb6-8" tabindex="-1"></a>  <span class="at">seed =</span> <span class="dv">1</span></span>
+<span id="cb6-9"><a href="#cb6-9" tabindex="-1"></a>)</span>
+<span id="cb6-10"><a href="#cb6-10" tabindex="-1"></a><span class="co">#&gt; Warning: Small validation set for 5 trait(s): mass (n=2), clutch (n=4), migr</span></span>
+<span id="cb6-11"><a href="#cb6-11" tabindex="-1"></a><span class="co">#&gt; (n=3), diet (n=3), threat (n=3). Calibrated gate and conformal scores will be</span></span>
+<span id="cb6-12"><a href="#cb6-12" tabindex="-1"></a><span class="co">#&gt; noisy for these trait(s). 95% split-conformal coverage is NOT achievable for 3</span></span>
+<span id="cb6-13"><a href="#cb6-13" tabindex="-1"></a><span class="co">#&gt; trait(s) with fewer than 19 validation cells (mass (n=2), clutch (n=4), threat</span></span>
+<span id="cb6-14"><a href="#cb6-14" tabindex="-1"></a><span class="co">#&gt; (n=3)): the achievable ceiling is n_val / (n_val + 1), which only reaches 0.95</span></span>
+<span id="cb6-15"><a href="#cb6-15" tabindex="-1"></a><span class="co">#&gt; at n_val &gt;= 19. See `?fit_pigauto` under &#39;Calibration at small n&#39; for smoothing</span></span>
+<span id="cb6-16"><a href="#cb6-16" tabindex="-1"></a><span class="co">#&gt; options.</span></span>
+<span id="cb6-17"><a href="#cb6-17" tabindex="-1"></a><span class="fu">print</span>(fit)</span>
+<span id="cb6-18"><a href="#cb6-18" tabindex="-1"></a><span class="co">#&gt; pigauto_fit</span></span>
+<span id="cb6-19"><a href="#cb6-19" tabindex="-1"></a><span class="co">#&gt;   GNN     : off (baseline only)</span></span>
+<span id="cb6-20"><a href="#cb6-20" tabindex="-1"></a><span class="co">#&gt;   Species : 60 </span></span>
+<span id="cb6-21"><a href="#cb6-21" tabindex="-1"></a><span class="co">#&gt;   Traits  : 5 -- mass, clutch, migr, diet, threat </span></span>
+<span id="cb6-22"><a href="#cb6-22" tabindex="-1"></a><span class="co">#&gt;   Types   : binary=1, categorical=1, continuous=1, count=1, ordinal=1 </span></span>
+<span id="cb6-23"><a href="#cb6-23" tabindex="-1"></a><span class="co">#&gt;   Architecture: hidden_dim = 64 | k_eigen = 4 </span></span>
+<span id="cb6-24"><a href="#cb6-24" tabindex="-1"></a><span class="co">#&gt;   Best val loss : 1.4259 </span></span>
+<span id="cb6-25"><a href="#cb6-25" tabindex="-1"></a><span class="co">#&gt;   Test loss     : 1.3562 </span></span>
+<span id="cb6-26"><a href="#cb6-26" tabindex="-1"></a><span class="co">#&gt;   Gate calibration: yes</span></span>
+<span id="cb6-27"><a href="#cb6-27" tabindex="-1"></a><span class="co">#&gt;   Conformal scores: 3 traits</span></span></code></pre></div>
 </div>
 <div id="prediction-and-decoding" class="section level2">
 <h2>Prediction and decoding</h2>
@@ -579,9 +642,32 @@ available:</p>
 <span id="cb8-12"><a href="#cb8-12" tabindex="-1"></a><span class="co">#&gt; t4  0.6495271 0.1752365 0.1752365</span></span>
 <span id="cb8-13"><a href="#cb8-13" tabindex="-1"></a><span class="co">#&gt; t22 0.1752365 0.6495271 0.1752365</span></span>
 <span id="cb8-14"><a href="#cb8-14" tabindex="-1"></a><span class="co">#&gt; t18 0.1752365 0.1752365 0.6495271</span></span></code></pre></div>
-<p>The SE matrix provides type-appropriate uncertainty (see the
-uncertainty-mechanisms table in the GNN architecture vignette for what
-each column’s SE does and does not guarantee):</p>
+<p>The uncertainty matrix is type-dependent. Entries for binary and
+categorical traits are uncertainty scores, not Gaussian standard errors
+or measurement units. In this example, the ordinal <code>threat</code>
+column uses the threshold-joint baseline, which currently returns zero
+in <code>pred$se</code>; that zero is a placeholder, not evidence of
+certainty or an ordinal standard error. Continuous-family columns have
+scale-specific standard errors; see the <a href="gnn-architecture.html#uncertainty-quantification">uncertainty
+guide</a> before using them:</p>
+<ul>
+<li><strong>Class probabilities
+(<code>pred$probabilities</code>):</strong> predicted probabilities for
+binary and categorical classes. Compare classes or report their
+probabilities.</li>
+<li><strong>Uncertainty scores (<code>pred$se</code> for binary or
+categorical traits):</strong> type-specific scores, not standard errors.
+Use them to rank predictions by uncertainty; do not form a normal
+interval from them.</li>
+<li><strong>Model-based standard errors (<code>pred$se</code> for
+supported continuous-family traits):</strong> values on a trait-specific
+scale. Check the scale and assumptions in the uncertainty guide; these
+are not conformal intervals.</li>
+<li><strong>Conformal bounds (<code>pred$conformal_lower</code> and
+<code>pred$conformal_upper</code>):</strong> held-out
+residual-calibrated prediction bounds for supported traits. They are not
+Rubin-pooled uncertainty for a downstream model.</li>
+</ul>
 <div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a><span class="fu">head</span>(pred<span class="sc">$</span>se)</span>
 <span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a><span class="co">#&gt;     mass clutch      migr      diet threat</span></span>
 <span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a><span class="co">#&gt; t58    0      0 0.2124687 0.3504729      0</span></span>
@@ -593,32 +679,55 @@ each column’s SE does and does not guarantee):</p>
 </div>
 <div id="evaluation" class="section level2">
 <h2>Evaluation</h2>
-<p><code>evaluate_imputation()</code> dispatches type-specific
-metrics:</p>
-<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a>ev <span class="ot">&lt;-</span> <span class="fu">evaluate_imputation</span>(pred, pd<span class="sc">$</span>X_scaled, spl)</span>
-<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a><span class="fu">print</span>(ev)</span>
-<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a><span class="co">#&gt;    split  trait        type  n rmse pearson_r coverage_95 mae spearman_rho</span></span>
-<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a><span class="co">#&gt; 1    val   mass  continuous  2    0         1           1  NA           NA</span></span>
-<span id="cb10-5"><a href="#cb10-5" tabindex="-1"></a><span class="co">#&gt; 2    val clutch       count  4    0         1          NA   0           NA</span></span>
-<span id="cb10-6"><a href="#cb10-6" tabindex="-1"></a><span class="co">#&gt; 3    val   migr      binary  3   NA        NA          NA  NA           NA</span></span>
-<span id="cb10-7"><a href="#cb10-7" tabindex="-1"></a><span class="co">#&gt; 4    val   diet categorical  3   NA        NA          NA  NA           NA</span></span>
-<span id="cb10-8"><a href="#cb10-8" tabindex="-1"></a><span class="co">#&gt; 5    val threat     ordinal  3    0        NA          NA  NA            1</span></span>
-<span id="cb10-9"><a href="#cb10-9" tabindex="-1"></a><span class="co">#&gt; 6   test   mass  continuous 13    0         1           1  NA           NA</span></span>
-<span id="cb10-10"><a href="#cb10-10" tabindex="-1"></a><span class="co">#&gt; 7   test clutch       count 10    0         1          NA   0           NA</span></span>
-<span id="cb10-11"><a href="#cb10-11" tabindex="-1"></a><span class="co">#&gt; 8   test   migr      binary 10   NA        NA          NA  NA           NA</span></span>
-<span id="cb10-12"><a href="#cb10-12" tabindex="-1"></a><span class="co">#&gt; 9   test   diet categorical  6   NA        NA          NA  NA           NA</span></span>
-<span id="cb10-13"><a href="#cb10-13" tabindex="-1"></a><span class="co">#&gt; 10  test threat     ordinal  6    0        NA          NA  NA            1</span></span>
-<span id="cb10-14"><a href="#cb10-14" tabindex="-1"></a><span class="co">#&gt;    accuracy      brier zero_accuracy aitchison rmse_clr simplex_mae</span></span>
-<span id="cb10-15"><a href="#cb10-15" tabindex="-1"></a><span class="co">#&gt; 1        NA         NA            NA        NA       NA          NA</span></span>
-<span id="cb10-16"><a href="#cb10-16" tabindex="-1"></a><span class="co">#&gt; 2        NA         NA            NA        NA       NA          NA</span></span>
-<span id="cb10-17"><a href="#cb10-17" tabindex="-1"></a><span class="co">#&gt; 3         1 0.04514297            NA        NA       NA          NA</span></span>
-<span id="cb10-18"><a href="#cb10-18" tabindex="-1"></a><span class="co">#&gt; 4         1         NA            NA        NA       NA          NA</span></span>
-<span id="cb10-19"><a href="#cb10-19" tabindex="-1"></a><span class="co">#&gt; 5        NA         NA            NA        NA       NA          NA</span></span>
-<span id="cb10-20"><a href="#cb10-20" tabindex="-1"></a><span class="co">#&gt; 6        NA         NA            NA        NA       NA          NA</span></span>
-<span id="cb10-21"><a href="#cb10-21" tabindex="-1"></a><span class="co">#&gt; 7        NA         NA            NA        NA       NA          NA</span></span>
-<span id="cb10-22"><a href="#cb10-22" tabindex="-1"></a><span class="co">#&gt; 8         1 0.04514297            NA        NA       NA          NA</span></span>
-<span id="cb10-23"><a href="#cb10-23" tabindex="-1"></a><span class="co">#&gt; 9         1         NA            NA        NA       NA          NA</span></span>
-<span id="cb10-24"><a href="#cb10-24" tabindex="-1"></a><span class="co">#&gt; 10       NA         NA            NA        NA       NA          NA</span></span></code></pre></div>
+<p><code>evaluate_imputation()</code> dispatches type-specific metrics.
+Use <code>evaluation = TRUE</code> to keep validation and test values
+out of prediction:</p>
+<p><strong>CRAN 0.11.0:</strong> use <code>evaluate(fit)</code> for
+held-out scores. That release silently ignores
+<code>evaluation = TRUE</code> in <code>predict()</code>, so the call
+below would score production predictions and can give misleading
+results. The GitHub version supports the argument.
+<code>evaluate(fit)</code> returns a long table (<code>method</code>,
+<code>trait</code>, <code>type</code>, <code>metric</code>,
+<code>value</code>, <code>n_test</code>), whereas
+<code>evaluate_imputation()</code> returns a wide table. Do not compare
+production <code>predict(fit)</code> values with held-out truth as an
+evaluation shortcut.</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a>pred_eval <span class="ot">&lt;-</span> <span class="fu">predict</span>(fit, <span class="at">evaluation =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a>ev <span class="ot">&lt;-</span> <span class="fu">evaluate_imputation</span>(pred_eval, pd<span class="sc">$</span>X_scaled, spl)</span>
+<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a><span class="fu">print</span>(ev)</span>
+<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a><span class="co">#&gt;    split  trait        type  n      rmse   pearson_r coverage_95       mae</span></span>
+<span id="cb10-5"><a href="#cb10-5" tabindex="-1"></a><span class="co">#&gt; 1    val   mass  continuous  2 1.2367092 -1.00000000   0.5000000        NA</span></span>
+<span id="cb10-6"><a href="#cb10-6" tabindex="-1"></a><span class="co">#&gt; 2    val clutch       count  4 1.6710009 -0.44216026          NA 1.6452599</span></span>
+<span id="cb10-7"><a href="#cb10-7" tabindex="-1"></a><span class="co">#&gt; 3    val   migr      binary  3        NA          NA          NA        NA</span></span>
+<span id="cb10-8"><a href="#cb10-8" tabindex="-1"></a><span class="co">#&gt; 4    val   diet categorical  3        NA          NA          NA        NA</span></span>
+<span id="cb10-9"><a href="#cb10-9" tabindex="-1"></a><span class="co">#&gt; 5    val threat     ordinal  3 0.9688590          NA          NA        NA</span></span>
+<span id="cb10-10"><a href="#cb10-10" tabindex="-1"></a><span class="co">#&gt; 6   test   mass  continuous 13 1.2786925 -0.03154819   0.8461538        NA</span></span>
+<span id="cb10-11"><a href="#cb10-11" tabindex="-1"></a><span class="co">#&gt; 7   test clutch       count 10 0.9346293 -0.14660792          NA 0.8382015</span></span>
+<span id="cb10-12"><a href="#cb10-12" tabindex="-1"></a><span class="co">#&gt; 8   test   migr      binary 10        NA          NA          NA        NA</span></span>
+<span id="cb10-13"><a href="#cb10-13" tabindex="-1"></a><span class="co">#&gt; 9   test   diet categorical  6        NA          NA          NA        NA</span></span>
+<span id="cb10-14"><a href="#cb10-14" tabindex="-1"></a><span class="co">#&gt; 10  test threat     ordinal  6 1.4604038          NA          NA        NA</span></span>
+<span id="cb10-15"><a href="#cb10-15" tabindex="-1"></a><span class="co">#&gt;    spearman_rho accuracy     brier zero_accuracy aitchison rmse_clr simplex_mae</span></span>
+<span id="cb10-16"><a href="#cb10-16" tabindex="-1"></a><span class="co">#&gt; 1            NA       NA        NA            NA        NA       NA          NA</span></span>
+<span id="cb10-17"><a href="#cb10-17" tabindex="-1"></a><span class="co">#&gt; 2            NA       NA        NA            NA        NA       NA          NA</span></span>
+<span id="cb10-18"><a href="#cb10-18" tabindex="-1"></a><span class="co">#&gt; 3            NA      1.0 0.1481444            NA        NA       NA          NA</span></span>
+<span id="cb10-19"><a href="#cb10-19" tabindex="-1"></a><span class="co">#&gt; 4            NA      0.0        NA            NA        NA       NA          NA</span></span>
+<span id="cb10-20"><a href="#cb10-20" tabindex="-1"></a><span class="co">#&gt; 5     0.8660254       NA        NA            NA        NA       NA          NA</span></span>
+<span id="cb10-21"><a href="#cb10-21" tabindex="-1"></a><span class="co">#&gt; 6            NA       NA        NA            NA        NA       NA          NA</span></span>
+<span id="cb10-22"><a href="#cb10-22" tabindex="-1"></a><span class="co">#&gt; 7            NA       NA        NA            NA        NA       NA          NA</span></span>
+<span id="cb10-23"><a href="#cb10-23" tabindex="-1"></a><span class="co">#&gt; 8            NA      0.5 0.2481624            NA        NA       NA          NA</span></span>
+<span id="cb10-24"><a href="#cb10-24" tabindex="-1"></a><span class="co">#&gt; 9            NA      0.0        NA            NA        NA       NA          NA</span></span>
+<span id="cb10-25"><a href="#cb10-25" tabindex="-1"></a><span class="co">#&gt; 10   -0.8332381       NA        NA            NA        NA       NA          NA</span></span></code></pre></div>
+<p>Read <code>split</code> to distinguish validation from test results
+and <code>n</code> for the number of scored cells. For continuous and
+count traits, RMSE is on a transformed latent scale; for zero-inflated
+counts, RMSE and MAE are on the original count scale. Lower error scores
+and Brier scores indicate closer predictions; higher accuracy and
+correlation indicate better agreement. <code>coverage_95</code> here
+uses a symmetric standard-error interval on a latent scale, not the
+separate conformal-bound coverage reported by <code>evaluate()</code>.
+<code>NA</code> means that metric is not available for that trait and
+split.</p>
 </div>
 <div id="experimental-analysis-aware-multiple-imputation" class="section level2">
 <h2>Experimental analysis-aware multiple imputation</h2>
@@ -627,6 +736,14 @@ before imputation. The initial backend supports exactly one incomplete
 continuous covariate under MAR. It does not yet impute the mixed
 discrete and compositional outcomes shown earlier in this vignette for
 downstream inference.</p>
+<p>This code is a template, not a standalone example.
+<code>analysis_data</code> must contain a binary outcome <code>y</code>,
+one incomplete continuous predictor <code>x</code>, and a fully observed
+continuous predictor <code>z</code>; here <code>model = &quot;glm&quot;</code>
+specifies a binomial-logit model. For a runnable minimal example, see
+the <a href="../reference/multi_impute_analysis.html"><code>multi_impute_analysis()</code>
+function reference</a>. The <a href="multiple-imputation.html">multiple-imputation guide</a> explains
+eligibility and the current validation limits.</p>
 <div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a><span class="co"># Precompute nonlinear auxiliaries explicitly when required.</span></span>
 <span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a>analysis_data<span class="sc">$</span>z_sq <span class="ot">&lt;-</span> analysis_data<span class="sc">$</span>z<span class="sc">^</span><span class="dv">2</span></span>
 <span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a>mi <span class="ot">&lt;-</span> <span class="fu">multi_impute_analysis</span>(</span>
@@ -665,6 +782,13 @@ own narrow class of objects to <code>with_imputations()</code> and
 <code>pool_mi()</code>; the posterior route from
 <code>multi_impute()</code> supports the separately documented
 continuous-trait analyses.</p>
+<p>The analysis-aware backend is implemented, but implementation alone
+does not establish validated inferential performance. In the registered
+tests, 23 of 24 method-by-scenario results were indeterminate and one
+binomial-logit GLM result failed; none was classified as supported, and
+12 controls used complete data. See the <a href="validation-results.html#inferential-results">registered
+inferential results</a> and the <a href="multiple-imputation.html">multiple-imputation guide</a> before
+choosing an inferential route.</p>
 </div>
 
 
